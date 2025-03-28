@@ -222,7 +222,7 @@ The pipeline stores generated artifacts in MinIO object storage within the Kubef
 
 How to run pharmcat docker image:
 
-`docker run --rm -v C:/Users/gigak/PycharmProjects/realm_task_3_3_xai_uc2/Preprocessed/:/pharmcat/data pgkb/pharmcat pharmcat_pipeline /pharmcat/data/HG00436_freebayes.preprocessed.vcf`
+`docker run --rm -v C:/Users/gigak/PycharmProjects/realm_task_3_3_xai_uc2/Preprocessed/:/pharmcat/data pgkb/pharmcat pharmcat_pipeline --missing-to-ref -matcher -phenotyper -reporterJson /pharmcat/data/HG00276_freebayes.preprocessed.vcf`
 
 ## 📜 License & Usage
 
