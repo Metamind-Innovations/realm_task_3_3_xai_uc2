@@ -1,5 +1,9 @@
 **TODO**
 
+How to run pharmcat docker image:
+
+`docker run --rm -v C:/Users/gigak/PycharmProjects/realm_task_3_3_xai_uc2/Preprocessed/:/pharmcat/data pgkb/pharmcat pharmcat_pipeline /pharmcat/data/HG00436_freebayes.preprocessed.vcf`
+
 ## 📜 License & Usage
 
 All rights reserved by MetaMinds Innovations.
