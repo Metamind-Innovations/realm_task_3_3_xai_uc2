@@ -220,6 +220,10 @@ The pipeline stores generated artifacts in MinIO object storage within the Kubef
 3. Log in with the default credentials: **username:** `minio`, **password:** `minio123`
 4. Navigate to the `mlpipeline` bucket, where you'll find the respective folders according to the automatically assigned uuid of the pipeline. (An example location could be: `http://localhost:9000/minio/mlpipeline/v2/artifacts/pharmcat-pgx-analysis-pipeline/50c16278-0dde-44f1-b018-5b859a3fadf2/`)
 
+How to run pharmcat docker image:
+
+`docker run --rm -v C:/Users/gigak/PycharmProjects/realm_task_3_3_xai_uc2/Preprocessed/:/pharmcat/data pgkb/pharmcat pharmcat_pipeline /pharmcat/data/HG00436_freebayes.preprocessed.vcf`
+
 ## 📜 License & Usage
 
 All rights reserved by MetaMinds Innovations.
