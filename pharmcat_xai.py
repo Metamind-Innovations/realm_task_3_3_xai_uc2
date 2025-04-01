@@ -1,9 +1,11 @@
 import json
 import os
+import traceback
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from tqdm import tqdm
 
 
 class PharmcatExplainer:
@@ -25,7 +27,6 @@ class PharmcatExplainer:
 
     def parse_vcf(self):
         if not self.vcf_file:
-            print("No VCF file specified")
             return pd.DataFrame()
 
         variants = []
@@ -68,8 +69,7 @@ class PharmcatExplainer:
                             'gene': gene,
                             'genotype': genotype
                         })
-                except Exception as e:
-                    print(f"Error processing VCF line: {str(e)}")
+                except Exception:
                     continue
 
         self.vcf_data = pd.DataFrame(variants)
@@ -77,120 +77,12 @@ class PharmcatExplainer:
 
     def load_match_data(self):
         if not self.match_json_file:
-            print("No match JSON file specified")
             return []
 
         try:
             with open(self.match_json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-        except Exception as e:
-            print(f"Error loading match data: {str(e)}")
-            self.match_data = []
-            return []
-
-        results = []
-        for result in data.get('results', []):
-            gene = result.get('gene')
-            if not gene:
-                continue
-
-            # Skip genes not in focus list
-            if self.focus_genes and gene not in self.focus_genes:
-                continue
-
-            # Extract variant information
-            variants = []
-            for variant in result.get('variants', []):
-                if not isinstance(variant, dict):
-                    continue
-                variants.append({
-                    'position': variant.get('position'),
-                    'rsid': variant.get('rsid'),
-                    'call': variant.get('vcfCall'),
-                    'phased': variant.get('phased', False)
-                })
-
-            # Extract diplotype information
-            diplotypes = []
-            for diplotype in result.get('diplotypes', []):
-                if not isinstance(diplotype, dict):
-                    continue
-
-                diplotype_info = {
-                    'name': diplotype.get('name'),
-                    'score': diplotype.get('score'),
-                    'allele1': None,
-                    'allele2': None
-                }
-
-                haplotype1 = diplotype.get('haplotype1', {})
-                haplotype2 = diplotype.get('haplotype2', {})
-
-                if haplotype1:
-                    diplotype_info['allele1'] = {
-                        'name': haplotype1.get('name'),
-                        'sequences': haplotype1.get('sequences', [])
-                    }
-
-                if haplotype2:
-                    diplotype_info['allele2'] = {
-                        'name': haplotype2.get('name'),
-                        'sequences': haplotype2.get('sequences', [])
-                    }
-
-                diplotypes.append(diplotype_info)
-
-            # Extract haplotype information
-            haplotypes = []
-            for haplotype in result.get('haplotypes', []):
-                if not isinstance(haplotype, dict):
-                    continue
-
-                haplotype_info = {
-                    'name': haplotype.get('name'),
-                    'sequences': haplotype.get('sequences', []),
-                    'reference': haplotype.get('haplotype', {}).get('reference', False)
-                }
-
-                haplotypes.append(haplotype_info)
-
-            # Extract missing positions
-            missing_positions = []
-            match_data = result.get('matchData', {})
-            if match_data and 'missingPositions' in match_data:
-                for pos in match_data['missingPositions']:
-                    if not isinstance(pos, dict):
-                        continue
-                    missing_positions.append({
-                        'position': pos.get('position'),
-                        'rsid': pos.get('rsid'),
-                        'ref': pos.get('ref'),
-                        'alts': pos.get('alts', [])
-                    })
-
-            uncallable_haplotypes = result.get('uncallableHaplotypes', [])
-
-            results.append({
-                'gene': gene,
-                'variants': variants,
-                'diplotypes': diplotypes,
-                'haplotypes': haplotypes,
-                'missing_positions': missing_positions,
-                'uncallable_haplotypes': uncallable_haplotypes,
-                'phased': result.get('phased', False),
-                'match_data_phased': match_data.get('phased', False),
-                'match_data_homozygous': match_data.get('homozygous', False),
-                'match_data_effectively_phased': match_data.get('effectivelyPhased', False)
-            })
-
-        self.match_data = results
-        return results
-
-    def load_match_data_from_string(self, json_string):
-        try:
-            data = json.loads(json_string)
-        except Exception as e:
-            print(f"Error loading match data from string: {str(e)}")
+        except Exception:
             self.match_data = []
             return []
 
@@ -294,14 +186,12 @@ class PharmcatExplainer:
 
     def load_phenotype_data(self):
         if not self.phenotype_json_file:
-            print("No phenotype JSON file specified")
             return []
 
         try:
             with open(self.phenotype_json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-        except Exception as e:
-            print(f"Error loading phenotype data: {str(e)}")
+        except Exception:
             self.phenotype_data = []
             return []
 
@@ -375,7 +265,8 @@ class PharmcatExplainer:
 
         importance_scores = []
 
-        for _, variant in self.vcf_data.iterrows():
+        for _, variant in tqdm(self.vcf_data.iterrows(), total=len(self.vcf_data),
+                               desc="Calculating variant importance"):
             gene = variant['gene']
             if not gene:
                 continue
@@ -514,7 +405,6 @@ class PharmcatExplainer:
 
     def generate_summaries(self):
         if self.match_data is None:
-            print("No match data available")
             return []
 
         if self.variant_importance is None and self.vcf_file:
@@ -545,7 +435,7 @@ class PharmcatExplainer:
 
         # Process genes with variants if we have variant importance data
         if self.variant_importance is not None and not self.variant_importance.empty:
-            for gene, group in self.variant_importance.groupby('gene'):
+            for gene, group in tqdm(self.variant_importance.groupby('gene'), desc="Generating gene summaries"):
                 # Skip genes not in focus list
                 if self.focus_genes and gene not in self.focus_genes:
                     continue
@@ -657,7 +547,7 @@ class PharmcatExplainer:
                 summaries.append(gene_summary)
 
         # Process remaining genes from match data
-        for match_result in self.match_data:
+        for match_result in tqdm(self.match_data, desc="Processing remaining genes"):
             gene = match_result['gene']
             if gene in processed_genes:
                 continue
@@ -852,7 +742,6 @@ class PharmcatExplainer:
 
     def visualize_importance(self):
         if self.variant_importance is None or self.variant_importance.empty:
-            print("No variant importance data to visualize.")
             return
 
         # Create the overall importance plot
@@ -877,729 +766,9 @@ class PharmcatExplainer:
         plt.savefig(os.path.join(self.output_dir, "overall_variant_importance.png"), dpi=150)
         plt.close()
 
-    def generate_match_only_report(self):
-        if self.match_data is None:
-            print("No match data available. Load match data first.")
-            return None
-
-        output_path = os.path.join(self.output_dir, "match_only_report.html")
-
-        if self.gene_summaries is None:
-            self.generate_summaries()
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("""
-            <html>
-            <head>
-                <title>PharmCAT Match Data Report</title>
-                <meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px 40px; line-height: 1.6; }
-                    h1, h2, h3 { color: #2c3e50; }
-                    .gene-section { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; border-radius: 5px; }
-                    .explanation { background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; }
-                    .missing { color: #dc3545; }
-                    .present { color: #28a745; }
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                    th { background-color: #f2f2f2; }
-                    tr:nth-child(even) { background-color: #f9f9f9; }
-                    .focus-gene { background-color: #e3f2fd; }
-                </style>
-            </head>
-            <body>
-                <h1>PharmCAT Match Data Report</h1>
-                <p>This report explains pharmacogenomic diplotypes determined by PharmCAT based on the match data.</p>
-            """)
-
-            # Display focus genes if any
-            if self.focus_genes:
-                f.write("""
-                    <div class="explanation">
-                        <h3>Focus Genes</h3>
-                        <p>This analysis is focused on the following pharmacogenomic genes of interest:</p>
-                        <ul>
-                """)
-                for gene in self.focus_genes:
-                    f.write("<li><strong>{gene}</strong></li>")
-                f.write("""
-                        </ul>
-                    </div>
-                """)
-
-            # Summary table
-            f.write("""
-                <h2>Gene Summary</h2>
-                <table><tr>
-                        <th>Gene</th>
-                        <th>Diplotype</th>
-                        <th>Phasing Status</th>
-                        <th>Zygosity</th>
-                        <th>Variants Count</th>
-                        <th>Missing Data</th>
-                    </tr>
-            """)
-
-            for summary in self.gene_summaries:
-                gene = summary['gene']
-                match_result = next((r for r in self.match_data if r['gene'] == gene), None)
-
-                if not match_result:
-                    continue
-
-                diplotype = summary['diplotypes'][0] if summary['diplotypes'] else "Unknown"
-                phased = "Phased" if match_result.get('phased', False) else "Unphased"
-                homozygous = "Homozygous" if match_result.get('match_data_homozygous', False) else "Heterozygous"
-                variants_count = len(match_result.get('variants', []))
-                has_missing_data = bool(
-                    match_result.get('uncallable_haplotypes') or match_result.get('missing_positions'))
-
-                # Add class to highlight focus genes
-                focus_class = " focus-gene" if gene in self.focus_genes else ""
-
-                f.write(f"""
-                    <tr class="{focus_class}">
-                        <td>{gene}</td>
-                        <td>{diplotype}</td>
-                        <td>{phased}</td>
-                        <td>{homozygous}</td>
-                        <td>{variants_count}</td>
-                        <td class="{'missing' if has_missing_data else ''}">{('Yes' if has_missing_data else 'No')}</td>
-                    </tr>
-                """)
-
-            f.write("</table>")
-
-            # Gene details
-            for summary in self.gene_summaries:
-                gene = summary['gene']
-                match_result = next((r for r in self.match_data if r['gene'] == gene), None)
-
-                if not match_result:
-                    continue
-
-                diplotypes = summary['diplotypes']
-                diplotype_str = ", ".join(diplotypes) if diplotypes else "Unknown"
-                phenotype_str = ", ".join(summary['phenotypes']) if summary['phenotypes'] else "Unknown"
-
-                # Add class to highlight focus genes
-                focus_class = " focus-gene" if gene in self.focus_genes else ""
-
-                f.write(f"""
-                    <div class="gene-section{focus_class}">
-                        <h2>Gene: {gene}</h2>
-                        <p><strong>Diplotype(s):</strong> {diplotype_str}</p>
-                        <p><strong>Phenotype(s):</strong> {phenotype_str}</p>
-                        <p><strong>Phasing Status:</strong> {"Phased" if match_result.get('phased', False) else "Unphased"}</p>
-                        <p><strong>Zygosity:</strong> {"Homozygous" if match_result.get('match_data_homozygous', False) else "Heterozygous"}</p>
-                """)
-
-                # Haplotypes
-                if match_result.get('haplotypes'):
-                    f.write("<h3>Identified Haplotypes:</h3><ul>")
-                    for haplotype in match_result['haplotypes']:
-                        reference_status = " (reference)" if haplotype.get('reference', False) else ""
-                        f.write(f"<li>{haplotype.get('name', 'Unknown')}{reference_status}</li>")
-                    f.write("</ul>")
-
-                # Variants
-                if match_result.get('variants'):
-                    f.write("<h3>Variants:</h3><table>")
-                    f.write("<tr><th>RSID</th><th>Position</th><th>Call</th><th>Phased</th></tr>")
-
-                    for variant in match_result['variants']:
-                        rsid = variant.get('rsid', 'Unknown')
-                        position = variant.get('position', 'Unknown')
-                        call = variant.get('call', 'Unknown')
-                        phased = "Yes" if variant.get('phased', False) else "No"
-
-                        f.write(f"<tr><td>{rsid}</td><td>{position}</td><td>{call}</td><td>{phased}</td></tr>")
-
-                    f.write("</table>")
-
-                # Diplotypes in detail
-                if match_result.get('diplotypes'):
-                    f.write("<h3>Diplotype Details:</h3>")
-
-                    for idx, diplotype in enumerate(match_result['diplotypes']):
-                        name = diplotype.get('name', 'Unknown')
-                        score = diplotype.get('score', 'Unknown')
-
-                        f.write("<div class='diplotype-detail'>")
-                        f.write(f"<p><strong>Name:</strong> {name}</p>")
-                        f.write(f"<p><strong>Score:</strong> {score}</p>")
-
-                        if diplotype.get('allele1') or diplotype.get('allele2'):
-                            f.write("<p><strong>Alleles:</strong></p><ul>")
-
-                            if diplotype.get('allele1'):
-                                f.write(f"<li>Allele 1: {diplotype['allele1'].get('name', 'Unknown')}</li>")
-
-                            if diplotype.get('allele2'):
-                                f.write(f"<li>Allele 2: {diplotype['allele2'].get('name', 'Unknown')}</li>")
-
-                            f.write("</ul>")
-
-                        f.write("</div>")
-
-                # Uncallable haplotypes
-                if match_result.get('uncallable_haplotypes'):
-                    f.write("<h3>Uncallable Haplotypes:</h3><ul>")
-                    for haplotype in match_result['uncallable_haplotypes']:
-                        f.write(f"<li>{haplotype}</li>")
-                    f.write("</ul>")
-
-                # Missing positions
-                if match_result.get('missing_positions'):
-                    f.write("<h3>Missing Positions:</h3><ul>")
-                    for pos in match_result['missing_positions']:
-                        rsid = pos.get('rsid', 'Unknown')
-                        position = pos.get('position', 'Unknown')
-                        f.write(f"<li>{rsid} at position {position}</li>")
-                    f.write("</ul>")
-
-                # Clinical significance
-                clinical_significance = self.get_clinical_significance(gene, summary['phenotypes'])
-                if clinical_significance:
-                    f.write(f"""
-                        <div class="explanation">
-                            <h3>Clinical Significance:</h3>
-                            <p>{clinical_significance}</p>
-                        </div>
-                    """)
-
-                f.write("</div>")
-
-            f.write("""
-                <hr>
-                <footer>
-                    <p><em>This report was generated using PharmCAT XAI Explainer to analyze pharmacogenomic predictions.</em></p>
-                </footer>
-            </body>
-            </html>
-            """)
-
-        return output_path
-
-    def generate_phenotype_only_report(self):
-        if self.phenotype_data is None:
-            print("No phenotype data available. Load phenotype data first.")
-            return None
-
-        output_path = os.path.join(self.output_dir, "phenotype_only_report.html")
-
-        if self.gene_summaries is None:
-            self.generate_summaries()
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("""
-            <html>
-            <head>
-                <title>PharmCAT Phenotype Report</title>
-                <meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px 40px; line-height: 1.6; }
-                    h1, h2, h3 { color: #2c3e50; }
-                    .gene-section { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; border-radius: 5px; }
-                    .explanation { background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; }
-                    .clinical { background-color: #e8f4f8; padding: 15px; border-left: 4px solid #17a2b8; }
-                    .recommendation { background-color: #f0f9eb; padding: 15px; border-left: 4px solid #67c23a; }
-                    .warning { background-color: #fff9f0; padding: 15px; border-left: 4px solid #e6a23c; }
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                    th { background-color: #f2f2f2; }
-                    tr:nth-child(even) { background-color: #f9f9f9; }
-                    .focus-gene { background-color: #e3f2fd; }
-                    .metabolizer-poor { color: #dc3545; font-weight: bold; }
-                    .metabolizer-intermediate { color: #fd7e14; font-weight: bold; }
-                    .metabolizer-normal { color: #28a745; font-weight: bold; }
-                    .metabolizer-rapid { color: #17a2b8; font-weight: bold; }
-                    .metabolizer-ultrarapid { color: #6610f2; font-weight: bold; }
-                </style>
-            </head>
-            <body>
-                <h1>PharmCAT Phenotype Report</h1>
-                <p>This report presents the pharmacogenomic phenotypes predicted by PharmCAT and their clinical significance.</p>
-            """)
-
-            # Display focus genes if any
-            if self.focus_genes:
-                f.write("""
-                    <div class="explanation">
-                        <h3>Focus Genes</h3>
-                        <p>This analysis is focused on the following pharmacogenomic genes of interest:</p>
-                        <ul>
-                """)
-                for gene in self.focus_genes:
-                    f.write(f"<li><strong>{gene}</strong></li>")
-                f.write("""
-                        </ul>
-                    </div>
-                """)
-
-            # Summary table
-            f.write("""
-                <h2>Phenotype Summary</h2>
-                <table>
-                    <tr>
-                        <th>Gene</th>
-                        <th>Diplotype</th>
-                        <th>Phenotype</th>
-                        <th>Clinical Significance</th>
-                    </tr>
-            """)
-
-            for report in self.phenotype_data:
-                gene = report['gene_symbol']
-
-                # Get gene summary for additional information
-                gene_summary = next((s for s in self.gene_summaries if s['gene'] == gene), None)
-
-                diplotypes = []
-                phenotypes = []
-                for diplotype in report.get('diplotypes', []):
-                    label = diplotype.get('label',
-                                          f"{diplotype.get('allele1', 'Unknown')}/{diplotype.get('allele2', 'Unknown')}")
-                    diplotypes.append(label)
-                    phenotypes.extend(diplotype.get('phenotypes', []))
-
-                diplotype_str = ", ".join(diplotypes) if diplotypes else "Unknown"
-                phenotype_list = list(set(phenotypes))
-                phenotype_str = ", ".join(phenotype_list) if phenotype_list else "Unknown"
-
-                # Determine phenotype styling
-                phenotype_class = ""
-                if any("Poor Metabolizer" in p for p in phenotype_list):
-                    phenotype_class = "metabolizer-poor"
-                elif any("Intermediate Metabolizer" in p for p in phenotype_list):
-                    phenotype_class = "metabolizer-intermediate"
-                elif any("Normal Metabolizer" in p for p in phenotype_list):
-                    phenotype_class = "metabolizer-normal"
-                elif any("Rapid Metabolizer" in p for p in phenotype_list):
-                    phenotype_class = "metabolizer-rapid"
-                elif any("Ultrarapid Metabolizer" in p for p in phenotype_list):
-                    phenotype_class = "metabolizer-ultrarapid"
-
-                clinical_significance = self.get_clinical_significance(gene, phenotype_list)
-
-                # Add class to highlight focus genes
-                focus_class = " focus-gene" if gene in self.focus_genes else ""
-
-                f.write(f"""
-                    <tr class="{focus_class}">
-                        <td>{gene}</td>
-                        <td>{diplotype_str}</td>
-                        <td class="{phenotype_class}">{phenotype_str}</td>
-                        <td>{clinical_significance if clinical_significance else "No specific recommendations"}</td>
-                    </tr>
-                """)
-
-            f.write("</table>")
-
-            # Detailed gene sections
-            f.write("<h2>Detailed Phenotype Information</h2>")
-
-            for report in self.phenotype_data:
-                gene = report['gene_symbol']
-
-                # Add class to highlight focus genes
-                focus_class = " focus-gene" if gene in self.focus_genes else ""
-
-                f.write(f"""<div class="gene-section{focus_class}">
-                    <h3>Gene: {gene}</h3>
-                """)
-
-                # Find gene function
-                gene_function_map = {
-                    "CYP2D6": "metabolizes approximately 25% of clinically used drugs including antidepressants, antipsychotics, opioids, and beta blockers",
-                    "CYP2C19": "involved in the metabolism of several important drug classes including proton pump inhibitors, antiplatelet drugs, and antidepressants",
-                    "CYP2C9": "metabolizes many drugs including warfarin, NSAIDs, and some antidiabetics",
-                    "CYP3A4": "metabolizes more than 50% of clinically used drugs, including statins, calcium channel blockers, and many others",
-                    "CYP3A5": "metabolizes approximately 50% of clinically used drugs, particularly important for immunosuppressants like tacrolimus",
-                    "CYP4F2": "involved in vitamin K metabolism, affects warfarin dose requirements",
-                    "DPYD": "metabolizes fluoropyrimidine drugs like 5-fluorouracil (5-FU)",
-                    "SLCO1B1": "mediates the uptake of various drugs into hepatocytes, especially statins",
-                    "TPMT": "metabolizes thiopurine drugs like azathioprine and mercaptopurine",
-                    "UGT1A1": "responsible for bilirubin conjugation and metabolism of certain drugs including irinotecan",
-                }
-                gene_function = gene_function_map.get(gene, "affects drug metabolism or response")
-
-                f.write(f"<p><strong>Function:</strong> {gene_function}</p>")
-
-                # Diplotype table
-                if report.get('diplotypes'):
-                    f.write("""
-                        <h4>Diplotypes and Phenotypes</h4>
-                        <table>
-                            <tr>
-                                <th>Diplotype</th>
-                                <th>Allele 1</th>
-                                <th>Allele 2</th>
-                                <th>Phenotype</th>
-                            </tr>
-                    """)
-
-                    for diplotype in report['diplotypes']:
-                        allele1 = diplotype.get('allele1', 'Unknown')
-                        allele2 = diplotype.get('allele2', 'Unknown')
-                        label = diplotype.get('label', f"{allele1}/{allele2}")
-                        phenotypes = diplotype.get('phenotypes', ['Unknown'])
-                        phenotype_str = ", ".join(phenotypes)
-
-                        # Determine phenotype styling
-                        phenotype_class = ""
-                        if any("Poor Metabolizer" in p for p in phenotypes):
-                            phenotype_class = "metabolizer-poor"
-                        elif any("Intermediate Metabolizer" in p for p in phenotypes):
-                            phenotype_class = "metabolizer-intermediate"
-                        elif any("Normal Metabolizer" in p for p in phenotypes):
-                            phenotype_class = "metabolizer-normal"
-                        elif any("Rapid Metabolizer" in p for p in phenotypes):
-                            phenotype_class = "metabolizer-rapid"
-                        elif any("Ultrarapid Metabolizer" in p for p in phenotypes):
-                            phenotype_class = "metabolizer-ultrarapid"
-
-                        f.write(f"""
-                            <tr>
-                                <td>{label}</td>
-                                <td>{allele1}</td>
-                                <td>{allele2}</td>
-                                <td class="{phenotype_class}">{phenotype_str}</td>
-                            </tr>
-                        """)
-
-                    f.write("</table>")
-
-                # Variant information
-                if report.get('variants'):
-                    f.write("""
-                        <h4>Variants Affecting Phenotype</h4>
-                        <table>
-                            <tr>
-                                <th>RSID</th>
-                                <th>Position</th>
-                                <th>Call</th>
-                                <th>Phased</th>
-                            </tr>
-                    """)
-
-                    for variant in report['variants']:
-                        rsid = variant.get('rsid', 'Unknown')
-                        position = variant.get('position', 'Unknown')
-                        call = variant.get('call', 'Unknown')
-                        phased = "Yes" if variant.get('phased', False) else "No"
-
-                        f.write(f"""
-                            <tr>
-                                <td>{rsid}</td>
-                                <td>{position}</td>
-                                <td>{call}</td>
-                                <td>{phased}</td>
-                            </tr>
-                        """)
-
-                    f.write("</table>")
-
-                # Clinical significance
-                phenotypes = []
-                for diplotype in report.get('diplotypes', []):
-                    phenotypes.extend(diplotype.get('phenotypes', []))
-
-                phenotype_list = list(set(phenotypes))
-                clinical_significance = self.get_clinical_significance(gene, phenotype_list)
-
-                if clinical_significance:
-                    f.write(f"""
-                        <div class="clinical">
-                            <h4>Clinical Significance</h4>
-                            <p>{clinical_significance}</p>
-                        </div>
-                    """)
-
-                    # Add drug-specific recommendations
-                    f.write("""
-                        <div class="recommendation">
-                            <h4>Drug Recommendations</h4>
-                    """)
-
-                    if gene == "CYP2D6":
-                        f.write(
-                            "<p><strong>Affected drugs:</strong> Codeine, tramadol, tamoxifen, atomoxetine, paroxetine, risperidone, metoprolol</p>")
-                        if "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Consider alternative drugs not metabolized by CYP2D6. Avoid codeine (ineffective). Reduce doses of most CYP2D6 substrates.</p>")
-                        elif "Intermediate Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Monitor effectiveness of prodrugs like codeine. May need dose adjustments for some medications.</p>")
-                        elif "Ultrarapid Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Avoid codeine (risk of toxicity). May need increased doses of some drugs or alternatives.</p>")
-
-                    elif gene == "CYP2C19":
-                        f.write(
-                            "<p><strong>Affected drugs:</strong> Clopidogrel, escitalopram, omeprazole, pantoprazole, voriconazole</p>")
-                        if "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Consider alternative antiplatelet therapy to clopidogrel. May need lower doses of PPIs and some antidepressants.</p>")
-                        elif "Rapid Metabolizer" in phenotype_list or "Ultrarapid Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Standard clopidogrel dosing should be effective. May need higher doses of PPIs for efficacy.</p>")
-
-                    elif gene == "CYP2C9":
-                        f.write("<p><strong>Affected drugs:</strong> Warfarin, phenytoin, NSAIDs, sulfonylureas</p>")
-                        if "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Reduce warfarin dose (25-50% of standard). Monitor for NSAID toxicity. Consider alternatives.</p>")
-                        elif "Intermediate Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Start warfarin at lower dose and titrate carefully. Be cautious with NSAIDs.</p>")
-
-                    elif gene == "SLCO1B1":
-                        f.write(
-                            "<p><strong>Affected drugs:</strong> Statins (especially simvastatin), methotrexate</p>")
-                        if "Decreased Function" in phenotype_list or "Poor Function" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Prescribe lowest effective dose of simvastatin or switch to alternative statin. Monitor for myopathy.</p>")
-
-                    elif gene == "CYP3A5":
-                        f.write("<p><strong>Affected drugs:</strong> Tacrolimus, cyclosporine, certain statins</p>")
-                        if "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Start tacrolimus at lower dose, typically 40-50% of standard dosing.</p>")
-                        elif "Intermediate Metabolizer" in phenotype_list or "Normal Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> May require higher tacrolimus doses to achieve target concentrations.</p>")
-
-                    elif gene == "UGT1A1":
-                        f.write("<p><strong>Affected drugs:</strong> Irinotecan, atazanavir</p>")
-                        if "*28/*28" in str(phenotype_list) or "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Consider reduced initial dose of irinotecan for UGT1A1*28 homozygotes. Monitor for toxicity.</p>")
-
-                    elif gene == "DPYD":
-                        f.write("<p><strong>Affected drugs:</strong> 5-Fluorouracil (5-FU), capecitabine</p>")
-                        if "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Consider alternative therapy or 50% dose reduction. Careful monitoring for toxicity is essential.</p>")
-                        elif "Intermediate Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Start with 25-50% dose reduction and titrate according to tolerance.</p>")
-
-                    elif gene == "TPMT":
-                        f.write("<p><strong>Affected drugs:</strong> Azathioprine, mercaptopurine, thioguanine</p>")
-                        if "Poor Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Dramatic dose reduction (90%) or alternative therapy to prevent severe myelosuppression.</p>")
-                        elif "Intermediate Metabolizer" in phenotype_list:
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Start with 30-50% dose reduction and adjust according to tolerance and disease-specific guidelines.</p>")
-
-                    elif gene == "CYP4F2":
-                        f.write("<p><strong>Affected drugs:</strong> Warfarin</p>")
-                        if any("rs2108622" in p for p in phenotype_list):
-                            f.write(
-                                "<p><strong>Recommendations:</strong> Consider in conjunction with CYP2C9 and VKORC1 for warfarin dosing algorithms.</p>")
-
-                    else:
-                        f.write("<p>No specific drug recommendations available for this gene.</p>")
-
-                    f.write("</div>")
-
-                # Uncalled haplotypes or missing data
-                if report.get('uncalled_haplotypes'):
-                    f.write("""
-                        <div class="warning">
-                            <h4>Data Limitations</h4>
-                            <p>The following haplotypes could not be called due to missing data:</p>
-                            <ul>
-                    """)
-                    for haplotype in report['uncalled_haplotypes']:
-                        f.write(f"<li>{haplotype}</li>")
-                    f.write("""
-                            </ul>
-                            <p>This may affect the accuracy of the phenotype prediction.</p>
-                        </div>
-                    """)
-
-                f.write("</div>")
-
-            f.write("""
-                <hr>
-                <footer>
-                    <p><em>This report was generated using PharmCAT XAI Explainer to analyze pharmacogenomic phenotype predictions.</em></p>
-                    <p><strong>Disclaimer:</strong> These recommendations are for informational purposes only and do not replace clinical judgment. Always consult specific clinical guidelines and consider individual patient factors when making treatment decisions.</p>
-                </footer>
-            </body>
-            </html>
-            """)
-
-        return output_path
-
-    def create_counterfactual_analysis(self):
-        if self.variant_importance is None and self.vcf_file:
-            self.calculate_variant_importance()
-        elif self.variant_importance is None:
-            print("No variant importance data available. Cannot create counterfactual analysis.")
-            return pd.DataFrame()
-
-        counterfactuals = []
-
-        for _, variant in self.variant_importance.iterrows():
-            gene = variant['gene']
-            genotype = variant['genotype']
-
-            alt_genotypes = []
-            if genotype == '0/0':
-                alt_genotypes = ['0/1', '1/1']
-            elif genotype == '0/1':
-                alt_genotypes = ['0/0', '1/1']
-            elif genotype == '1/1':
-                alt_genotypes = ['0/0', '0/1']
-            elif '|' in genotype:  # For phased data
-                ref_genotype = genotype.replace('|', '/')
-                if ref_genotype == '0/0':
-                    alt_genotypes = ['0/1', '1/1']
-                elif ref_genotype == '0/1':
-                    alt_genotypes = ['0/0', '1/1']
-                elif ref_genotype == '1/1':
-                    alt_genotypes = ['0/0', '0/1']
-
-            for alt_genotype in alt_genotypes:
-                impact = "unknown"
-                confidence = "low"
-                detail = ""
-
-                if gene == "CYP2D6":
-                    if genotype == '0/0' and alt_genotype == '0/1':
-                        impact = "moderate decrease in metabolism"
-                        confidence = "medium"
-                        detail = "May reduce metabolism of certain drugs (codeine, tamoxifen)"
-                    elif genotype == '0/0' and alt_genotype == '1/1':
-                        impact = "significant decrease in metabolism"
-                        confidence = "high"
-                        detail = "Could significantly impair drug metabolism, increasing risk of adverse effects"
-                    elif genotype == '0/1' and alt_genotype == '0/0':
-                        impact = "moderate increase in metabolism"
-                        confidence = "medium"
-                        detail = "May enhance drug clearance, potentially reducing efficacy"
-                    elif genotype == '0/1' and alt_genotype == '1/1':
-                        impact = "moderate decrease in metabolism"
-                        confidence = "medium"
-                        detail = "Further reduction in enzyme activity"
-                    elif genotype == '1/1' and alt_genotype == '0/0':
-                        impact = "significant increase in metabolism"
-                        confidence = "high"
-                        detail = "Normal enzyme function restored"
-                    elif genotype == '1/1' and alt_genotype == '0/1':
-                        impact = "moderate increase in metabolism"
-                        confidence = "medium"
-                        detail = "Partial restoration of enzyme function"
-
-                elif gene == "CYP2C19":
-                    if genotype == '0/0' and alt_genotype == '0/1':
-                        impact = "moderate decrease in metabolism"
-                        confidence = "medium"
-                        detail = "May reduce activation of clopidogrel and increase exposure to PPIs"
-                    elif genotype == '0/0' and alt_genotype == '1/1':
-                        impact = "significant decrease in metabolism"
-                        confidence = "high"
-                        detail = "Could significantly impair clopidogrel activation"
-
-                elif gene == "CYP2C9":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "decreased metabolism of warfarin and NSAIDs"
-                        confidence = "high"
-                        detail = "May require lower doses to avoid adverse effects"
-
-                elif gene == "CYP3A4":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "altered drug metabolism"
-                        confidence = "medium"
-                        detail = "Could affect metabolism of many drugs including statins and immunosuppressants"
-
-                elif gene == "CYP3A5":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "increased metabolism of tacrolimus"
-                        confidence = "high"
-                        detail = "May require higher doses of tacrolimus and similar drugs"
-                    elif genotype == '1/1' and alt_genotype in ['0/0', '0/1']:
-                        impact = "decreased metabolism of tacrolimus"
-                        confidence = "high"
-                        detail = "May require lower doses to avoid toxicity"
-
-                elif gene == "DPYD":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "increased risk of fluoropyrimidine toxicity"
-                        confidence = "high"
-                        detail = "May require dose reduction or alternative therapy"
-
-                elif gene == "SLCO1B1":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "increased risk of statin-induced myopathy"
-                        confidence = "high"
-                        detail = "May require lower statin doses or alternative therapy"
-
-                elif gene == "TPMT":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "increased risk of thiopurine toxicity"
-                        confidence = "high"
-                        detail = "May require substantial dose reduction to avoid myelosuppression"
-
-                elif gene == "UGT1A1":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "increased risk of irinotecan toxicity"
-                        confidence = "high"
-                        detail = "May require dose reduction to avoid toxicity"
-
-                elif gene == "CYP4F2":
-                    if genotype == '0/0' and alt_genotype in ['0/1', '1/1']:
-                        impact = "altered warfarin dose requirements"
-                        confidence = "medium"
-                        detail = "May require higher warfarin doses"
-
-                # Generic assessment if no specific rule
-                if impact == "unknown":
-                    if genotype == '0/0' and alt_genotype == '0/1':
-                        impact = "moderate effect change"
-                        confidence = "low"
-                    elif genotype == '0/0' and alt_genotype == '1/1':
-                        impact = "significant effect change"
-                        confidence = "medium"
-                    elif genotype == '0/1' and alt_genotype == '0/0':
-                        impact = "moderate reversal effect"
-                        confidence = "low"
-                    elif genotype == '0/1' and alt_genotype == '1/1':
-                        impact = "moderate enhancement effect"
-                        confidence = "low"
-                    elif genotype == '1/1' and alt_genotype == '0/0':
-                        impact = "significant reversal effect"
-                        confidence = "medium"
-                    elif genotype == '1/1' and alt_genotype == '0/1':
-                        impact = "moderate reduction effect"
-                        confidence = "low"
-
-                explanation = f"If {variant['rsid']} had genotype {alt_genotype} instead of {genotype}, there might be a {impact} on phenotype"
-                if detail:
-                    explanation += f". {detail}"
-
-                counterfactuals.append({
-                    'gene': gene,
-                    'rsid': variant['rsid'],
-                    'current_genotype': genotype,
-                    'alternative_genotype': alt_genotype,
-                    'potential_impact': impact,
-                    'confidence': confidence,
-                    'detail': detail,
-                    'explanation': explanation
-                })
-
-        return pd.DataFrame(counterfactuals)
-
     def generate_html_report(self):
         if self.gene_summaries is None:
             self.generate_summaries()
-
-        counterfactuals = self.create_counterfactual_analysis()
 
         with open(os.path.join(self.output_dir, "pharmcat_xai_report.html"), 'w', encoding='utf-8') as f:
             f.write("""
@@ -1619,7 +788,6 @@ class PharmcatExplainer:
                         border-radius: 4px;
                     }
                     .explanation { background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; }
-                    .counterfactual { background-color: #fff3cd; padding: 10px; margin-top: 20px; border-radius: 5px; }
                     .missing { color: #dc3545; }
                     .present { color: #28a745; }
                     table { border-collapse: collapse; width: 100%; margin: 15px 0; }
@@ -1871,26 +1039,6 @@ class PharmcatExplainer:
                     'summary'] else ""
                 f.write(f"""<div class="explanation"><p>{explanation_text}</p></div>""")
 
-                # Add counterfactual analysis
-                gene_counterfactuals = counterfactuals[
-                    counterfactuals['gene'] == gene] if not counterfactuals.empty else pd.DataFrame()
-                if not gene_counterfactuals.empty:
-                    f.write("<h3>What-If Analysis:</h3>")
-                    f.write("<p>This section explores how different genotypes might affect the phenotype:</p>")
-
-                    conf_map = {'high': 2, 'medium': 1, 'low': 0}
-                    top_counterfactuals = gene_counterfactuals.sort_values('confidence', key=lambda x: x.map(conf_map),
-                                                                           ascending=False)
-
-                    for _, cf in top_counterfactuals.head(3).iterrows():
-                        conf_color = "#dc3545" if cf['confidence'] == "high" else "#fd7e14" if cf[
-                                                                                                   'confidence'] == "medium" else "#6c757d"
-                        f.write(f"""
-                            <div class="counterfactual">
-                                <p><strong style="color:{conf_color};">{cf['confidence'].title()} confidence:</strong> {cf['explanation']}</p>
-                            </div>
-                        """)
-
                 f.write("</div>")  # Close gene-section
 
             # Add overall importance plot if it exists
@@ -1904,60 +1052,34 @@ class PharmcatExplainer:
                 <hr>
                 <footer>
                     <p><em>This report was generated using PharmCAT XAI Explainer to analyze pharmacogenomic predictions.</em></p>
-                    <p>View the <a href="match_only_report.html">match data report</a> or <a href="phenotype_only_report.html">phenotype report</a> for more details.</p>
                 </footer>
             </body>
             </html>
             """)
 
-    def run(self, json_string=None):
+    def run(self):
         try:
-            print("Starting XAI analysis...")
-            print(f"Focusing on genes: {', '.join(self.focus_genes)}" if self.focus_genes else "Analyzing all genes")
+            print(f"Starting PharmCAT XAI analysis on {len(self.focus_genes)} genes...")
 
-            if json_string:
-                print("Loading match data from provided JSON string")
-                self.load_match_data_from_string(json_string)
-            else:
-                if self.vcf_file:
-                    print(f"Parsing VCF file: {self.vcf_file}")
-                    self.parse_vcf()
+            if self.vcf_file:
+                self.parse_vcf()
 
-                if self.match_json_file:
-                    print(f"Loading match data from: {self.match_json_file}")
-                    self.load_match_data()
+            if self.match_json_file:
+                self.load_match_data()
 
-                if self.phenotype_json_file:
-                    print(f"Loading phenotype data from: {self.phenotype_json_file}")
-                    self.load_phenotype_data()
+            if self.phenotype_json_file:
+                self.load_phenotype_data()
 
-            print("Generating gene summaries...")
             self.generate_summaries()
 
-            if self.vcf_file or json_string:
-                print("Calculating variant importance...")
+            if self.vcf_file:
                 self.calculate_variant_importance()
-
-                print("Creating overall importance visualization...")
                 self.visualize_importance()
 
-            print("Generating HTML reports...")
             self.generate_html_report()
-            self.generate_match_only_report()
-            self.generate_phenotype_only_report()
 
-            print(f"XAI analysis complete. Results saved to {self.output_dir}/")
-            print("Generated output files:")
-            print(f"  - {self.output_dir}/overall_variant_importance.png")
-            print(f"  - {self.output_dir}/pharmcat_xai_report.html")
-            print(f"  - {self.output_dir}/match_only_report.html")
-            print(f"  - {self.output_dir}/phenotype_only_report.html")
-
-            # Count the genes and variants analyzed
-            gene_count = len(self.gene_summaries) if self.gene_summaries else 0
-            variant_count = len(self.variant_importance) if self.variant_importance is not None else 0
-
-            print(f"Analyzed {gene_count} genes and {variant_count} variants")
+            # Meaningful completion message
+            print(f"XAI analysis complete. Results saved to {self.output_dir}/pharmcat_xai_report.html")
 
             return {
                 'vcf_data': self.vcf_data,
@@ -1969,7 +1091,6 @@ class PharmcatExplainer:
             }
         except Exception as e:
             print(f"Error during XAI analysis: {str(e)}")
-            import traceback
             traceback.print_exc()
             return {
                 'error': str(e),
@@ -1980,18 +1101,207 @@ class PharmcatExplainer:
                 'gene_summaries': self.gene_summaries
             }
 
+    def find_file_sets(self, base_dir='pharmcat_processed'):
+        file_sets = []
+
+        if not os.path.exists(base_dir):
+            return file_sets
+
+        subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+
+        for subdir in subdirs:
+            subdir_path = os.path.join(base_dir, subdir)
+
+            for file in os.listdir(subdir_path):
+                if file.endswith('.preprocessed.vcf'):
+                    vcf_path = os.path.join(subdir_path, file)
+                    base_name = os.path.splitext(file)[0]
+                    match_json = os.path.join(subdir_path, f"{base_name}.match.json")
+                    phenotype_json = os.path.join(subdir_path, f"{base_name}.phenotype.json")
+
+                    if os.path.exists(match_json) and os.path.exists(phenotype_json):
+                        file_sets.append({
+                            'vcf_file': vcf_path,
+                            'match_json': match_json,
+                            'phenotype_json': phenotype_json,
+                            'sample_id': subdir
+                        })
+
+        return file_sets
+
+    def run_all(self, base_dir='pharmcat_processed'):
+        file_sets = self.find_file_sets(base_dir)
+        if not file_sets:
+            return None
+
+        print(f"Processing {len(file_sets)} PharmCAT sample sets...")
+
+        original_vcf = self.vcf_file
+        original_match = self.match_json_file
+        original_phenotype = self.phenotype_json_file
+        original_output_dir = self.output_dir
+
+        all_results = []
+        for file_set in tqdm(file_sets, desc="Processing samples"):
+            self.vcf_file = file_set['vcf_file']
+            self.match_json_file = file_set['match_json']
+            self.phenotype_json_file = file_set['phenotype_json']
+            self.output_dir = os.path.join(original_output_dir, file_set['sample_id'])
+
+            os.makedirs(self.output_dir, exist_ok=True)
+
+            self.vcf_data = None
+            self.match_data = None
+            self.phenotype_data = None
+            self.variant_importance = None
+            self.gene_summaries = None
+
+            results = self.run()
+            results['sample_id'] = file_set['sample_id']
+            all_results.append(results)
+
+        self.vcf_file = original_vcf
+        self.match_json_file = original_match
+        self.phenotype_json_file = original_phenotype
+        self.output_dir = original_output_dir
+
+        self.generate_unified_report(all_results)
+        print(f"Analysis complete. Unified report available at {self.output_dir}/unified_pharmcat_report.html")
+
+        return all_results
+
+    def generate_unified_report(self, all_results):
+        if not all_results:
+            return
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        unified_report_path = os.path.join(self.output_dir, "unified_pharmcat_report.html")
+
+        with open(unified_report_path, 'w', encoding='utf-8') as f:
+            f.write("""
+            <html>
+            <head>
+                <title>Unified PharmCAT XAI Report</title>
+                <meta charset="UTF-8">
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px 40px; line-height: 1.6; }
+                    h1, h2, h3 { color: #2c3e50; }
+                    .sample-section { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; border-radius: 5px; }
+                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                    th { background-color: #f2f2f2; }
+                    tr:nth-child(even) { background-color: #f9f9f9; }
+                    .focus-gene { background-color: #e3f2fd; }
+                </style>
+            </head>
+            <body>
+                <h1>Unified PharmCAT XAI Report</h1>
+                <p>This report provides a comprehensive analysis of pharmacogenomic phenotype predictions across multiple samples.</p>
+            """)
+
+            if self.focus_genes:
+                f.write("<h2>Focus Genes</h2><ul>")
+                for gene in self.focus_genes:
+                    f.write(f"<li><strong>{gene}</strong></li>")
+                f.write("</ul>")
+
+            f.write('<h2>Cross-Sample Gene Summary</h2>')
+            f.write('<table><tr><th>Gene</th>')
+
+            for result in all_results:
+                f.write(f'<th>{result["sample_id"]}</th>')
+            f.write('</tr>')
+
+            for gene in self.focus_genes:
+                f.write(f'<tr><td class="focus-gene">{gene}</td>')
+
+                for result in all_results:
+                    gene_summaries = result.get('gene_summaries', [])
+                    gene_summary = next((s for s in gene_summaries if s['gene'] == gene), None)
+
+                    if gene_summary:
+                        phenotypes = ", ".join(gene_summary['phenotypes']) if gene_summary['phenotypes'] else "Unknown"
+                        diplotypes = ", ".join(gene_summary['diplotypes']) if gene_summary['diplotypes'] else "Unknown"
+                        cell_content = f"{diplotypes}<br>{phenotypes}"
+                    else:
+                        cell_content = "No data"
+
+                    f.write(f'<td>{cell_content}</td>')
+
+                f.write('</tr>')
+
+            f.write('</table>')
+
+            for result in all_results:
+                sample_id = result['sample_id']
+                gene_summaries = result.get('gene_summaries', [])
+
+                f.write(f'<div id="{sample_id}" class="sample-section">')
+                f.write(f'<h2>Sample: {sample_id}</h2>')
+
+                f.write('<h3>Gene Summary</h3>')
+                f.write("""
+                    <table>
+                        <tr>
+                            <th>Gene</th>
+                            <th>Diplotype(s)</th>
+                            <th>Phenotype(s)</th>
+                            <th>Important Variants</th>
+                            <th>Phasing Status</th>
+                        </tr>
+                """)
+
+                for gene_summary in gene_summaries:
+                    if gene_summary['gene'] not in self.focus_genes:
+                        continue
+
+                    gene = gene_summary['gene']
+                    phenotypes = ", ".join(gene_summary['phenotypes']) if gene_summary['phenotypes'] else "Unknown"
+                    diplotypes = ", ".join(gene_summary['diplotypes']) if gene_summary['diplotypes'] else "Unknown"
+
+                    match_data = result.get('match_data', [])
+                    match_result = next((r for r in match_data if r['gene'] == gene), None)
+                    phasing_status = "Phased" if match_result and match_result.get('phased') else "Unphased"
+
+                    variant_importance = result.get('variant_importance', pd.DataFrame())
+                    gene_variants = variant_importance[
+                        variant_importance['gene'] == gene] if not variant_importance.empty else pd.DataFrame()
+                    variants_count = len(gene_variants)
+
+                    f.write(f"""
+                        <tr class="focus-gene">
+                            <td>{gene}</td>
+                            <td>{diplotypes}</td>
+                            <td>{phenotypes}</td>
+                            <td>{variants_count}</td>
+                            <td>{phasing_status}</td>
+                        </tr>
+                    """)
+
+                f.write('</table>')
+
+                sample_dir = os.path.join(self.output_dir, sample_id)
+                if os.path.exists(os.path.join(sample_dir, "pharmcat_xai_report.html")):
+                    f.write(
+                        f'<p><a href="{sample_id}/pharmcat_xai_report.html" target="_blank">View detailed report for {sample_id}</a></p>')
+
+                f.write('</div>')
+
+            f.write("""
+                <hr>
+                <footer>
+                    <p><em>This unified report was generated using PharmCAT XAI Explainer to analyze pharmacogenomic predictions across multiple samples.</em></p>
+                </footer>
+            </body>
+            </html>
+            """)
+
 
 if __name__ == "__main__":
     # Define key pharmacogenes to focus on
     focus_genes = ["CYP2B6", "CYP2C19", "CYP2C9", "CYP3A4", "CYP3A5", "CYP4F2", "DPYD", "SLCO1B1", "TPMT", "UGT1A1"]
 
-    # Paths to input files
-    vcf_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.vcf"
-    match_json_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.match.json"
-    phenotype_json_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.phenotype.json"
-
-    # Create and run the explainer
-    explainer = PharmcatExplainer(vcf_file, match_json_file, phenotype_json_file)
-    # Focus on selected genes
+    # Create the explainer with no specific file paths
+    explainer = PharmcatExplainer(output_dir='xai_results')
     explainer.focus_genes = focus_genes
-    results = explainer.run()
+    explainer.run_all('pharmcat_processed')
