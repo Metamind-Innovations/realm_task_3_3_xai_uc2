@@ -277,9 +277,9 @@ def visualize_gene_validation(gene_validation_df, output_dir):
 def run_validation():
     """Main function to run the validation process."""
     # Paths
-    vcf_file = "Preprocessed/HG00276_freebayes.preprocessed.vcf"
-    match_json_file = "Preprocessed/HG00276_freebayes.preprocessed.match.json"
-    phenotype_json_file = "Preprocessed/HG00276_freebayes.preprocessed.phenotype.json"
+    vcf_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.vcf"
+    match_json_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.match.json"
+    phenotype_json_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.phenotype.json"
     ground_truth_file = "Groundtruth/getrm_updated_calls.xlsx"
     output_dir = "validation_results"
 

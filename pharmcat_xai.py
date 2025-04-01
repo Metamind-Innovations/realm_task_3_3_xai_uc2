@@ -1986,9 +1986,9 @@ if __name__ == "__main__":
     focus_genes = ["CYP2B6", "CYP2C19", "CYP2C9", "CYP3A4", "CYP3A5", "CYP4F2", "DPYD", "SLCO1B1", "TPMT", "UGT1A1"]
 
     # Paths to input files
-    vcf_file = "Preprocessed/HG00276_freebayes.preprocessed.vcf"
-    match_json_file = "Preprocessed/HG00276_freebayes.preprocessed.match.json"
-    phenotype_json_file = "Preprocessed/HG00276_freebayes.preprocessed.phenotype.json"
+    vcf_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.vcf"
+    match_json_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.match.json"
+    phenotype_json_file = "pharmcat_processed/HG00276/HG00276_freebayes.preprocessed.phenotype.json"
 
     # Create and run the explainer
     explainer = PharmcatExplainer(vcf_file, match_json_file, phenotype_json_file)
