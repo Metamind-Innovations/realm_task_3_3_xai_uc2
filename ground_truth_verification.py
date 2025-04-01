@@ -31,65 +31,71 @@ def load_ground_truth(excel_file):
             return None
 
         # Try to read the Excel file
-        return pd.read_excel(excel_file)
+        data = pd.read_excel(excel_file)
+        print(f"Successfully loaded ground truth data with {len(data)} rows and {len(data.columns)} columns")
+        print(f"Column names: {', '.join(str(col) for col in data.columns)}")
+        return data
     except Exception as e:
         print(f"Error loading ground truth data: {str(e)}")
         return None
 
 
-def extract_gene_based_validation(gt_data, importance_df):
+def extract_gene_based_validation(gt_data, importance_df, focus_genes=None):
     """Extract gene-based validation data by comparing known important genes."""
     if gt_data is None or importance_df is None or importance_df.empty:
         return None
 
     try:
-        # Key genes in pharmacogenomics
-        key_genes = ["CYP2D6", "CYP2C19", "UGT1A1", "SLCO1B1", "CYP3A5", "VKORC1", "CYP4F2"]
+        # If focus_genes is provided, use it; otherwise use default key genes
+        if focus_genes:
+            key_genes = focus_genes
+        else:
+            # Key genes in pharmacogenomics
+            key_genes = ["CYP2D6", "CYP2C19", "UGT1A1", "SLCO1B1", "CYP3A5", "VKORC1", "CYP4F2"]
 
         # Extract gene information from ground truth
         gt_genes = []
 
-        # Look for columns that contain gene names
-        gene_cols = []
-        for col in gt_data.columns:
-            col_str = str(col).lower()
-            if any(term in col_str for term in ['gene', 'symbol', 'name']):
-                gene_cols.append(col)
+        # Print a sample of the ground truth data to help with debugging
+        print("\nChecking ground truth data for gene mentions in COLUMN HEADERS:")
 
-        if gene_cols:
-            for col in gene_cols:
-                for gene in key_genes:
-                    if gt_data[col].astype(str).str.contains(gene).any():
-                        matches = gt_data[gt_data[col].astype(str).str.contains(gene)]
-                        gt_genes.append({
-                            'gene': gene,
-                            'in_ground_truth': True,
-                            'mentions': len(matches),
-                            'ground_truth_data': matches
-                        })
+        # Convert column headers to strings for searching
+        column_headers = [str(col) for col in gt_data.columns]
 
-        # If no specific gene columns, search all columns
-        if not gt_genes:
-            for gene in key_genes:
-                found = False
+        # Initialize all genes as not found
+        for gene in key_genes:
+            found = False
+            mentions = 0
+
+            # First check if gene is a column header or part of a column header
+            for header in column_headers:
+                if gene.lower() in header.lower():
+                    found = True
+                    # Count non-empty cells in this column as mentions
+                    gene_column = gt_data[header]
+                    mentions = gene_column.dropna().shape[0]
+                    print(f"  {gene}: Found in column header '{header}' with {mentions} non-empty cells")
+                    break
+
+            # If not found in headers, also check the data (as a backup)
+            if not found:
                 for col in gt_data.columns:
-                    if gt_data[col].astype(str).str.contains(gene).any():
+                    col_data = gt_data[col].astype(str).str.lower()
+                    if col_data.str.contains(gene.lower()).any():
                         found = True
-                        matches = gt_data[gt_data[col].astype(str).str.contains(gene)]
-                        gt_genes.append({
-                            'gene': gene,
-                            'in_ground_truth': True,
-                            'mentions': len(matches),
-                            'ground_truth_data': matches
-                        })
+                        new_mentions = col_data.str.contains(gene.lower()).sum()
+                        mentions += new_mentions
+                        print(f"  {gene}: Found in data of column '{col}' with {new_mentions} mentions")
 
-                if not found:
-                    gt_genes.append({
-                        'gene': gene,
-                        'in_ground_truth': False,
-                        'mentions': 0,
-                        'ground_truth_data': None
-                    })
+            if not found:
+                print(f"  {gene}: Not found in column headers or data")
+
+            gt_genes.append({
+                'gene': gene,
+                'in_ground_truth': found,
+                'mentions': mentions,
+                'ground_truth_data': None  # We don't need to store the data here
+            })
 
         # Get gene information from our importance scores
         our_genes = []
@@ -134,108 +140,8 @@ def extract_gene_based_validation(gt_data, importance_df):
         return pd.DataFrame(results)
     except Exception as e:
         print(f"Error extracting gene-based validation: {str(e)}")
-        return None
-
-
-def extract_variant_based_validation(gt_data, importance_df):
-    """Extract variant-based validation by identifying important variants in both datasets."""
-    if gt_data is None or importance_df is None or importance_df.empty:
-        return None
-
-    try:
-        # Find RS IDs in ground truth data
-        rs_ids = []
-
-        # Look for columns that might contain RS IDs
-        for col in gt_data.columns:
-            col_str = str(col).lower()
-            if any(term in col_str for term in ['rs', 'id', 'variant', 'snp']):
-                # Extract RS IDs using regex
-                for val in gt_data[col].dropna():
-                    if isinstance(val, str) and 'rs' in val.lower():
-                        # Extract RS IDs using string methods
-                        if 'rs' in val.lower():
-                            start_idx = val.lower().find('rs')
-                            # Extract the ID, assuming it's followed by digits
-                            rs_id = ''
-                            for char in val[start_idx:]:
-                                if char.isdigit() or char.lower() == 'r' or char.lower() == 's':
-                                    rs_id += char
-                                else:
-                                    break
-                            if rs_id and rs_id.lower().startswith('rs') and len(rs_id) > 2:
-                                rs_ids.append({
-                                    'rsid': rs_id,
-                                    'source_column': col,
-                                    'source_value': val
-                                })
-
-        if not rs_ids:
-            # If no RS IDs found in column names, search all text values
-            for col in gt_data.columns:
-                for val in gt_data[col].astype(str).dropna():
-                    if 'rs' in val.lower():
-                        # Extract the RS ID
-                        start_idx = val.lower().find('rs')
-                        rs_id = ''
-                        for char in val[start_idx:]:
-                            if char.isdigit() or char.lower() == 'r' or char.lower() == 's':
-                                rs_id += char
-                            else:
-                                break
-                        if rs_id and rs_id.lower().startswith('rs') and len(rs_id) > 2:
-                            rs_ids.append({
-                                'rsid': rs_id,
-                                'source_column': col,
-                                'source_value': val
-                            })
-
-        # Extract unique RS IDs
-        unique_rs_ids = list(set([r['rsid'] for r in rs_ids]))
-        print(f"Found {len(unique_rs_ids)} unique RS IDs in ground truth data")
-
-        # Compare with our importance scores
-        comparison = []
-        for rs_id in unique_rs_ids:
-            # Find matching variant in our results
-            matching_variant = importance_df[importance_df['rsid'].str.lower() == rs_id.lower()]
-
-            if not matching_variant.empty:
-                # Extract information
-                for _, row in matching_variant.iterrows():
-                    comparison.append({
-                        'rsid': rs_id,
-                        'gene': row['gene'],
-                        'in_ground_truth': True,
-                        'in_our_results': True,
-                        'our_importance': row['importance'],
-                        'our_genotype': row['genotype']
-                    })
-            else:
-                comparison.append({
-                    'rsid': rs_id,
-                    'gene': 'Unknown',
-                    'in_ground_truth': True,
-                    'in_our_results': False,
-                    'our_importance': 0,
-                    'our_genotype': 'Not found'
-                })
-
-        # Add variants from our results that are not in ground truth
-        for _, row in importance_df.iterrows():
-            if row['rsid'].lower() not in [r.lower() for r in unique_rs_ids]:
-                comparison.append({
-                    'rsid': row['rsid'],
-                    'gene': row['gene'],
-                    'in_ground_truth': False,
-                    'in_our_results': True,
-                    'our_importance': row['importance'],
-                    'our_genotype': row['genotype']
-                })
-
-        return pd.DataFrame(comparison)
-    except Exception as e:
-        print(f"Error extracting variant-based validation: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -368,231 +274,6 @@ def visualize_gene_validation(gene_validation_df, output_dir):
         print(f"Error visualizing gene validation: {str(e)}")
 
 
-def visualize_variant_validation(variant_validation_df, output_dir):
-    """Create visualizations for variant-based validation."""
-    if variant_validation_df is None or variant_validation_df.empty:
-        print("No variant validation data to visualize.")
-        return
-
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Filter to keep only variants found in both datasets
-        common_variants = variant_validation_df[
-            variant_validation_df['in_ground_truth'] & variant_validation_df['in_our_results']]
-
-        if not common_variants.empty:
-            # 1. Bar chart of importance scores for common variants
-            plt.figure(figsize=(14, 8))
-
-            # Sort by importance score
-            sorted_variants = common_variants.sort_values('our_importance', ascending=False)
-
-            # Create the bar chart
-            bars = sns.barplot(x='rsid', y='our_importance', data=sorted_variants)
-
-            plt.title('Importance Scores for Variants Found in Ground Truth')
-            plt.xlabel('Variant (rsID)')
-            plt.ylabel('Importance Score')
-            plt.xticks(rotation=45, ha='right')
-
-            # Add gene labels on top of bars
-            for i, row in enumerate(sorted_variants.itertuples()):
-                plt.text(i, row.our_importance + 0.1,
-                         row.gene,
-                         ha='center', va='bottom',
-                         fontsize=8, rotation=45)
-
-            plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'common_variant_importance.png'), dpi=150)
-            plt.close()
-
-        # 2. Grouped bar chart comparing all variants
-        plt.figure(figsize=(10, 6))
-
-        # Create a summary of variant counts by gene and presence in datasets
-        summary_data = []
-
-        # Variants in both datasets
-        both_count = len(
-            variant_validation_df[variant_validation_df['in_ground_truth'] & variant_validation_df['in_our_results']])
-        summary_data.append({
-            'category': 'In Both',
-            'count': both_count
-        })
-
-        # Variants only in ground truth
-        gt_only_count = len(
-            variant_validation_df[variant_validation_df['in_ground_truth'] & ~variant_validation_df['in_our_results']])
-        summary_data.append({
-            'category': 'Ground Truth Only',
-            'count': gt_only_count
-        })
-
-        # Variants only in our results
-        our_only_count = len(
-            variant_validation_df[~variant_validation_df['in_ground_truth'] & variant_validation_df['in_our_results']])
-        summary_data.append({
-            'category': 'Our Results Only',
-            'count': our_only_count
-        })
-
-        # Create the summary DataFrame
-        summary_df = pd.DataFrame(summary_data)
-
-        # Create the bar chart
-        sns.barplot(x='category', y='count', data=summary_df)
-
-        plt.title('Variant Distribution Between Datasets')
-        plt.xlabel('Category')
-        plt.ylabel('Variant Count')
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'variant_distribution.png'), dpi=150)
-        plt.close()
-
-        # 3. Create a variant validation HTML report
-        with open(os.path.join(output_dir, 'variant_validation.html'), 'w', encoding='utf-8') as f:
-            # Calculate percentages first
-            total_variants = len(variant_validation_df)
-            both_percent = both_count / total_variants * 100 if total_variants > 0 else 0
-            gt_only_percent = gt_only_count / total_variants * 100 if total_variants > 0 else 0
-            our_only_percent = our_only_count / total_variants * 100 if total_variants > 0 else 0
-
-            # Create HTML content with properly substituted values
-            html_content = f"""
-            <html>
-            <head>
-                <title>Variant-Based Validation</title>
-                <meta charset="UTF-8">
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px 40px; line-height: 1.6; }}
-                    h1, h2, h3 {{ color: #2c3e50; }}
-                    table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                    th {{ background-color: #f2f2f2; }}
-                    tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                    .highlighted {{ background-color: #d4edda; }}
-                </style>
-            </head>
-            <body>
-                <h1>Variant-Based Validation Report</h1>
-                <p>This report compares the variants found in our XAI results with the ground truth data.</p>
-
-                <h2>Variant Summary</h2>
-                <table>
-                    <tr>
-                        <th>Category</th>
-                        <th>Count</th>
-                        <th>Percentage</th>
-                    </tr>
-                    <tr>
-                        <td>Variants in both datasets</td>
-                        <td>{both_count}</td>
-                        <td>{both_percent:.1f}%</td>
-                    </tr>
-                    <tr>
-                        <td>Variants only in ground truth</td>
-                        <td>{gt_only_count}</td>
-                        <td>{gt_only_percent:.1f}%</td>
-                    </tr>
-                    <tr>
-                        <td>Variants only in our results</td>
-                        <td>{our_only_count}</td>
-                        <td>{our_only_percent:.1f}%</td>
-                    </tr>
-                    <tr>
-                        <td>Total variants</td>
-                        <td>{total_variants}</td>
-                        <td>100%</td>
-                    </tr>
-                </table>
-
-                <h2>Visualization</h2>
-                <div>
-                    <h3>Variant Distribution</h3>
-                    <img src="variant_distribution.png" alt="Variant distribution" style="max-width:100%;">
-                </div>
-            """
-
-            if not common_variants.empty:
-                html_content += """
-                <div>
-                    <h3>Importance Scores for Common Variants</h3>
-                    <img src="common_variant_importance.png" alt="Common variant importance" style="max-width:100%;">
-                </div>
-                """
-
-            # Add a table of variants with high importance scores
-            high_importance = variant_validation_df[variant_validation_df['our_importance'] >= 5].sort_values(
-                'our_importance', ascending=False)
-            if not high_importance.empty:
-                html_content += """
-                <h2>High Importance Variants</h2>
-                <p>These variants received the highest importance scores in our analysis:</p>
-                <table>
-                    <tr>
-                        <th>Variant</th>
-                        <th>Gene</th>
-                        <th>Importance Score</th>
-                        <th>In Ground Truth</th>
-                        <th>Genotype</th>
-                    </tr>
-                """
-
-                for _, row in high_importance.iterrows():
-                    highlighted = "highlighted" if row['in_ground_truth'] else ""
-                    html_content += f"""
-                    <tr class="{highlighted}">
-                        <td>{row['rsid']}</td>
-                        <td>{row['gene']}</td>
-                        <td>{row['our_importance']:.2f}</td>
-                        <td>{"Yes" if row['in_ground_truth'] else "No"}</td>
-                        <td>{row['our_genotype']}</td>
-                    </tr>
-                    """
-
-                html_content += "</table>"
-
-            # Add a table of common variants
-            if not common_variants.empty:
-                html_content += """
-                <h2>Variants Found in Both Datasets</h2>
-                <table>
-                    <tr>
-                        <th>Variant</th>
-                        <th>Gene</th>
-                        <th>Importance Score</th>
-                        <th>Genotype</th>
-                    </tr>
-                """
-
-                for _, row in common_variants.sort_values(['gene', 'our_importance'],
-                                                          ascending=[True, False]).iterrows():
-                    html_content += f"""
-                    <tr>
-                        <td>{row['rsid']}</td>
-                        <td>{row['gene']}</td>
-                        <td>{row['our_importance']:.2f}</td>
-                        <td>{row['our_genotype']}</td>
-                    </tr>
-                    """
-
-                html_content += "</table>"
-
-            html_content += """
-            </body>
-            </html>
-            """
-
-            # Write the fully rendered HTML content to the file
-            f.write(html_content)
-
-    except Exception as e:
-        print(f"Error visualizing variant validation: {str(e)}")
-        import traceback
-        traceback.print_exc()
-
-
 def run_validation():
     """Main function to run the validation process."""
     # Paths
@@ -602,32 +283,33 @@ def run_validation():
     ground_truth_file = "Groundtruth/getrm_updated_calls.xlsx"
     output_dir = "validation_results"
 
+    # Focus genes - must match those in pharmcat_xai.py
+    focus_genes = ["CYP2B6", "CYP2C19", "CYP2C9", "CYP3A4", "CYP3A5", "CYP4F2", "DPYD", "SLCO1B1", "TPMT", "UGT1A1"]
+
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Run PharmCAT XAI if needed or load existing results
-    xai_results_file = os.path.join(output_dir, "xai_results.json")
+    # Run PharmCAT XAI analysis
+    print("Running PharmCAT XAI analysis...")
+    explainer = PharmcatExplainer(vcf_file, match_json_file, phenotype_json_file, output_dir='xai_results')
+    explainer.focus_genes = focus_genes
+    results = explainer.run()
 
-    if os.path.exists(xai_results_file):
-        print("Loading existing XAI results...")
-        try:
-            results = {
-                'variant_importance': pd.read_json(xai_results_file)
-            }
-        except:
-            print("Error loading existing results. Running PharmCAT XAI analysis...")
-            explainer = PharmcatExplainer(vcf_file, match_json_file, phenotype_json_file)
-            results = explainer.run()
-            # Save results for future use
-            if 'variant_importance' in results and not results['variant_importance'].empty:
-                results['variant_importance'].to_json(xai_results_file)
+    # Check if the XAI analysis generated the expected files
+    required_files = [
+        'xai_results/overall_variant_importance.png',
+        'xai_results/pharmcat_xai_report.html',
+        'xai_results/match_only_report.html',
+        'xai_results/phenotype_only_report.html'
+    ]
+
+    missing_files = [f for f in required_files if not os.path.exists(f)]
+    if missing_files:
+        print("Warning: Some required output files are missing:")
+        for file in missing_files:
+            print(f"  - {file}")
     else:
-        print("Running PharmCAT XAI analysis...")
-        explainer = PharmcatExplainer(vcf_file, match_json_file, phenotype_json_file)
-        results = explainer.run()
-        # Save results for future use
-        if 'variant_importance' in results and not results['variant_importance'].empty:
-            results['variant_importance'].to_json(xai_results_file)
+        print("All required output files were generated successfully.")
 
     # Load ground truth data
     print("\nLoading ground truth data...")
@@ -637,24 +319,16 @@ def run_validation():
         print("Error: Could not load ground truth data. Validation aborted.")
         return
 
-    # Perform gene-based validation
+    # Perform gene-based validation with focus genes
     print("\nPerforming gene-based validation...")
-    gene_validation = extract_gene_based_validation(gt_data, results['variant_importance'])
+    gene_validation = extract_gene_based_validation(gt_data, results['variant_importance'], focus_genes)
 
     if gene_validation is not None:
         print("\nVisualizing gene-based validation...")
         visualize_gene_validation(gene_validation, output_dir)
 
-    # Perform variant-based validation
-    print("\nPerforming variant-based validation...")
-    variant_validation = extract_variant_based_validation(gt_data, results['variant_importance'])
-
-    if variant_validation is not None:
-        print("\nVisualizing variant-based validation...")
-        visualize_variant_validation(variant_validation, output_dir)
-
-    # Create a combined validation report
-    print("\nCreating combined validation report...")
+    # Create validation report
+    print("\nCreating validation report...")
     with open(os.path.join(output_dir, 'validation_report.html'), 'w', encoding='utf-8') as f:
         f.write("""
         <html>
@@ -670,7 +344,16 @@ def run_validation():
         </head>
         <body>
             <h1>PharmCAT XAI Validation Report</h1>
-            <p>This report compares the XAI results with the ground truth data.</p>
+            <p>This report compares the XAI results with the ground truth data in getrm_updated_calls.xlsx.</p>
+
+            <div class="section">
+                <h2>Generated Reports</h2>
+                <ul>
+                    <li><a href="../xai_results/pharmcat_xai_report.html" target="_blank">Main XAI Report</a></li>
+                    <li><a href="../xai_results/match_only_report.html" target="_blank">Match Data Report</a></li>
+                    <li><a href="../xai_results/phenotype_only_report.html" target="_blank">Phenotype Report</a></li>
+                </ul>
+            </div>
 
             <div class="section">
                 <h2>Gene-Based Validation</h2>
@@ -678,14 +361,24 @@ def run_validation():
             </div>
 
             <div class="section">
-                <h2>Variant-Based Validation</h2>
-                <iframe src="variant_validation.html" height="600"></iframe>
+                <h2>Validation Summary</h2>
+                <p>This validation compares our XAI analysis against the ground truth data for the following genes:</p>
+                <ul>
+        """)
+
+        for gene in focus_genes:
+            f.write(f"<li>{gene}</li>")
+
+        f.write("""
+                </ul>
+                <p>The visualizations above show how our variant importance scoring aligns with known variants in the ground truth dataset.</p>
             </div>
         </body>
         </html>
         """)
 
     print(f"\nValidation complete! Reports saved to {output_dir}")
+    print(f"Open {output_dir}/validation_report.html to view the complete validation results")
 
 
 if __name__ == "__main__":
