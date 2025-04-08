@@ -1,1307 +1,435 @@
 import json
-import os
-import traceback
+import re
 
-import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-import seaborn as sns
-from tqdm import tqdm
+import shap
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
 
-class PharmcatExplainer:
-    def __init__(self, vcf_file=None, match_json_file=None, phenotype_json_file=None, output_dir='xai_results'):
-        self.vcf_file = vcf_file
-        self.match_json_file = match_json_file
-        self.phenotype_json_file = phenotype_json_file
-        self.output_dir = output_dir
-        self.focus_genes = ["CYP2B6", "CYP2C19", "CYP2C9", "CYP3A4", "CYP3A5", "CYP4F2", "DPYD", "SLCO1B1", "TPMT",
-                            "UGT1A1"]
+def vcf_to_dataframe(vcf_file, target_genes):
+    """Convert VCF file to a pandas DataFrame focusing on target genes."""
+    variants = []
 
-        os.makedirs(output_dir, exist_ok=True)
-
-        self.vcf_data = None
-        self.match_data = None
-        self.phenotype_data = None
-        self.variant_importance = None
-        self.gene_summaries = None
-
-    def parse_vcf(self):
-        if not self.vcf_file:
-            return pd.DataFrame()
-
-        variants = []
-        with open(self.vcf_file, 'r') as f:
-            for line in f:
-                if line.startswith('#'):
-                    continue
-
-                fields = line.strip().split('\t')
-                if len(fields) < 10:
-                    continue
-
-                try:
-                    chrom = fields[0]
-                    pos = int(fields[1])
-                    rsid = fields[2]
-                    ref = fields[3]
-                    alt = fields[4]
-                    info = fields[7]
-
-                    gene = None
-                    if 'PX=' in info:
-                        for item in info.split(';'):
-                            if item.startswith('PX='):
-                                gene = item.split('=')[1]
-                                break
-
-                    genotype = "0/0"
-                    if ":" in fields[9]:
-                        genotype = fields[9].split(':')[0]
-
-                    # Only include variants from focus genes if they're specified
-                    if gene and (not self.focus_genes or gene in self.focus_genes):
-                        variants.append({
-                            'chrom': chrom,
-                            'pos': pos,
-                            'rsid': rsid if rsid != '.' else f"pos_{pos}",
-                            'ref': ref,
-                            'alt': alt.split(',')[0],
-                            'gene': gene,
-                            'genotype': genotype
-                        })
-                except Exception:
-                    continue
-
-        self.vcf_data = pd.DataFrame(variants)
-        return self.vcf_data
-
-    def load_match_data(self):
-        if not self.match_json_file:
-            return []
-
-        try:
-            with open(self.match_json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            self.match_data = []
-            return []
-
-        results = []
-        for result in data.get('results', []):
-            gene = result.get('gene')
-            if not gene:
+    with open(vcf_file, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
                 continue
 
-            # Skip genes not in focus list
-            if self.focus_genes and gene not in self.focus_genes:
+            parts = line.strip().split('\t')
+            if len(parts) < 8:
                 continue
 
-            # Extract variant information
-            variants = []
-            for variant in result.get('variants', []):
-                if not isinstance(variant, dict):
-                    continue
-                variants.append({
-                    'position': variant.get('position'),
-                    'rsid': variant.get('rsid'),
-                    'call': variant.get('vcfCall'),
-                    'phased': variant.get('phased', False)
-                })
+            chrom = parts[0]
+            pos = parts[1]
+            rsid = parts[2]
+            ref = parts[3]
+            alt = parts[4]
+            info = parts[7]
 
-            # Extract diplotype information
-            diplotypes = []
-            for diplotype in result.get('diplotypes', []):
-                if not isinstance(diplotype, dict):
-                    continue
+            # Check if this variant is for one of our target genes
+            gene_match = re.search(r'PX=([^;]+)', info)
+            if not gene_match:
+                continue
 
-                diplotype_info = {
-                    'name': diplotype.get('name'),
-                    'score': diplotype.get('score'),
-                    'allele1': None,
-                    'allele2': None
-                }
+            gene = gene_match.group(1)
+            if gene not in target_genes:
+                continue
 
-                haplotype1 = diplotype.get('haplotype1', {})
-                haplotype2 = diplotype.get('haplotype2', {})
+            # Extract genotype information
+            genotype = "0/0"  # Default
+            if len(parts) > 9:
+                format_fields = parts[8].split(':')
+                sample_fields = parts[9].split(':')
 
-                if haplotype1:
-                    diplotype_info['allele1'] = {
-                        'name': haplotype1.get('name'),
-                        'sequences': haplotype1.get('sequences', [])
-                    }
+                if 'GT' in format_fields:
+                    gt_index = format_fields.index('GT')
+                    if gt_index < len(sample_fields):
+                        genotype = sample_fields[gt_index]
 
-                if haplotype2:
-                    diplotype_info['allele2'] = {
-                        'name': haplotype2.get('name'),
-                        'sequences': haplotype2.get('sequences', [])
-                    }
+            # Convert genotype to numeric representation
+            gt_numeric = np.nan
+            if genotype == '0/0':
+                gt_numeric = 0  # Reference homozygous
+            elif genotype in ['0/1', '1/0', '0/2', '2/0']:
+                gt_numeric = 1  # Heterozygous
+            elif genotype in ['1/1', '2/2', '1/2', '2/1']:
+                gt_numeric = 2  # Alternate homozygous or compound heterozygous
 
-                diplotypes.append(diplotype_info)
-
-            # Extract haplotype information
-            haplotypes = []
-            for haplotype in result.get('haplotypes', []):
-                if not isinstance(haplotype, dict):
-                    continue
-
-                haplotype_info = {
-                    'name': haplotype.get('name'),
-                    'sequences': haplotype.get('sequences', []),
-                    'reference': haplotype.get('haplotype', {}).get('reference', False)
-                }
-
-                haplotypes.append(haplotype_info)
-
-            # Extract missing positions
-            missing_positions = []
-            match_data = result.get('matchData', {})
-            if match_data and 'missingPositions' in match_data:
-                for pos in match_data['missingPositions']:
-                    if not isinstance(pos, dict):
-                        continue
-                    missing_positions.append({
-                        'position': pos.get('position'),
-                        'rsid': pos.get('rsid'),
-                        'ref': pos.get('ref'),
-                        'alts': pos.get('alts', [])
-                    })
-
-            uncallable_haplotypes = result.get('uncallableHaplotypes', [])
-
-            results.append({
+            variants.append({
                 'gene': gene,
-                'variants': variants,
-                'diplotypes': diplotypes,
-                'haplotypes': haplotypes,
-                'missing_positions': missing_positions,
-                'uncallable_haplotypes': uncallable_haplotypes,
-                'phased': result.get('phased', False),
-                'match_data_phased': match_data.get('phased', False),
-                'match_data_homozygous': match_data.get('homozygous', False),
-                'match_data_effectively_phased': match_data.get('effectivelyPhased', False)
+                'rsid': rsid,
+                'position': pos,
+                'ref': ref,
+                'alt': alt,
+                'genotype': genotype,
+                'genotype_value': gt_numeric
             })
 
-        self.match_data = results
-        return results
+    df = pd.DataFrame(variants)
+    df.to_csv('vcf_converted.csv', index=False)
+    return df
 
-    def load_phenotype_data(self):
-        if not self.phenotype_json_file:
-            return []
 
-        try:
-            with open(self.phenotype_json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            self.phenotype_data = []
-            return []
+def generate_synthetic_samples(vcf_df, n_samples=100):
+    """Generate synthetic samples by perturbing the original genotypes."""
+    # Create feature matrix where columns are gene_rsid combinations
+    features = {}
+    for _, row in vcf_df.iterrows():
+        key = f"{row['gene']}_{row['rsid']}"
+        features[key] = row['genotype_value']
 
-        gene_reports = []
-        for source, genes in data.get('geneReports', {}).items():
-            for gene_symbol, gene_info in genes.items():
-                # Skip genes not in focus list
-                if self.focus_genes and gene_symbol not in self.focus_genes:
-                    continue
+    # Create synthetic samples
+    all_samples = []
+    all_samples.append(features.copy())  # Include original sample
 
-                diplotypes = []
+    for _ in range(n_samples):
+        sample = features.copy()
 
-                diplotype_sources = []
-                if 'recommendationDiplotypes' in gene_info and gene_info['recommendationDiplotypes']:
-                    diplotype_sources.extend(gene_info['recommendationDiplotypes'])
-                elif 'sourceDiplotypes' in gene_info and gene_info['sourceDiplotypes']:
-                    diplotype_sources.extend(gene_info['sourceDiplotypes'])
+        # Randomly perturb some genotypes
+        for key in sample:
+            if np.random.random() < 0.3:  # 30% chance of mutation
+                current = sample[key]
+                if not np.isnan(current):
+                    # Choose a different genotype
+                    options = [g for g in [0, 1, 2] if g != current]
+                    sample[key] = np.random.choice(options)
 
-                for diplotype in diplotype_sources:
-                    if not isinstance(diplotype, dict):
-                        continue
+        all_samples.append(sample)
 
-                    allele1_obj = diplotype.get('allele1') or {}
-                    allele2_obj = diplotype.get('allele2') or {}
+    return pd.DataFrame(all_samples)
 
-                    allele1 = allele1_obj.get('name', 'Unknown') if isinstance(allele1_obj, dict) else 'Unknown'
-                    allele2 = allele2_obj.get('name', 'Unknown') if isinstance(allele2_obj, dict) else 'Unknown'
-                    phenotypes = diplotype.get('phenotypes', ['Unknown'])
 
-                    if isinstance(phenotypes, str):
-                        phenotypes = [phenotypes]
+def extract_pharmcat_data(match_file, phenotype_file, target_genes):
+    """Extract relevant data from pharmcat output files."""
+    match_df = pd.read_csv(match_file)
+    phenotype_df = pd.read_csv(phenotype_file)
 
-                    diplotypes.append({
-                        'allele1': allele1,
-                        'allele2': allele2,
-                        'phenotypes': phenotypes,
-                        'label': diplotype.get('label', f"{allele1}/{allele2}")
-                    })
+    # Extract phenotype information
+    gene_data = {}
 
-                variants = []
-                for variant in gene_info.get('variants', []):
-                    variants.append({
-                        'position': variant.get('position'),
-                        'rsid': variant.get('dbSnpId'),
-                        'call': variant.get('call'),
-                        'alleles': variant.get('alleles', []),
-                        'phased': variant.get('phased', False)
-                    })
+    for gene in target_genes:
+        gene_phenotypes = phenotype_df[phenotype_df['gene'] == gene]
+        gene_matches = match_df[match_df['gene'] == gene]
 
-                gene_reports.append({
-                    'source': source,
-                    'gene_symbol': gene_symbol,
-                    'diplotypes': diplotypes,
-                    'variants': variants,
-                    'uncalled_haplotypes': gene_info.get('uncalledHaplotypes', []),
-                    'phased': gene_info.get('phased', False)
-                })
+        if gene_phenotypes.empty:
+            continue
 
-        self.phenotype_data = gene_reports
-        return gene_reports
+        # Extract phenotype
+        phenotype = gene_phenotypes['phenotype'].iloc[0] if 'phenotype' in gene_phenotypes.columns and not pd.isna(
+            gene_phenotypes['phenotype'].iloc[0]) else "Unknown"
 
-    def calculate_variant_importance(self):
-        if self.vcf_data is None:
-            self.parse_vcf()
+        # Extract variants
+        variants = []
+        if not gene_matches.empty and 'variant_rsids' in gene_matches.columns:
+            for _, row in gene_matches.iterrows():
+                if pd.notna(row['variant_rsids']) and row['variant_rsids']:
+                    variants.extend(row['variant_rsids'].split(';'))
 
-        if self.match_data is None:
-            self.load_match_data()
+        # Extract diplotype info
+        diplotype = "Unknown"
+        allele1 = "Unknown"
+        allele2 = "Unknown"
 
-        if self.phenotype_data is None:
-            self.load_phenotype_data()
+        if not gene_phenotypes.empty:
+            diplotype = gene_phenotypes['diplotype_label'].iloc[
+                0] if 'diplotype_label' in gene_phenotypes.columns and not pd.isna(
+                gene_phenotypes['diplotype_label'].iloc[0]) else "Unknown"
+            allele1 = gene_phenotypes['allele1_name'].iloc[
+                0] if 'allele1_name' in gene_phenotypes.columns and not pd.isna(
+                gene_phenotypes['allele1_name'].iloc[0]) else "Unknown"
+            allele2 = gene_phenotypes['allele2_name'].iloc[
+                0] if 'allele2_name' in gene_phenotypes.columns and not pd.isna(
+                gene_phenotypes['allele2_name'].iloc[0]) else "Unknown"
 
-        importance_scores = []
-
-        for _, variant in tqdm(self.vcf_data.iterrows(), total=len(self.vcf_data),
-                               desc="Calculating variant importance"):
-            gene = variant['gene']
-            if not gene:
-                continue
-
-            # Skip genes not in focus list
-            if self.focus_genes and gene not in self.focus_genes:
-                continue
-
-            match_result = next((r for r in self.match_data if r['gene'] == gene), None)
-            if not match_result:
-                continue
-
-            gene_report = next((r for r in self.phenotype_data if r['gene_symbol'] == gene), None)
-
-            importance = 0
-            explanation = []
-
-            # Base evidence
-            importance += 1
-            explanation.append("Present in VCF file")
-
-            # Additional importance for focus genes
-            if gene in self.focus_genes:
-                importance += 0.5
-                explanation.append("Gene of pharmacogenomic interest")
-
-            # Match evidence
-            in_match_variants = False
-            for match_variant in match_result.get('variants', []):
-                if match_variant.get('rsid') == variant['rsid']:
-                    importance += 2
-                    explanation.append("Used in haplotype matching")
-                    in_match_variants = True
-                    break
-
-            # Diplotype evidence
-            in_diplotype = False
-            for diplotype in match_result.get('diplotypes', []):
-                allele1 = diplotype.get('allele1', {})
-                allele2 = diplotype.get('allele2', {})
-
-                for sequence in allele1.get('sequences', []) + allele2.get('sequences', []):
-                    if str(variant['pos']) in sequence:
-                        importance += 1.5
-                        explanation.append(f"Part of diplotype {diplotype.get('name')}")
-                        in_diplotype = True
-                        break
-
-                if in_diplotype:
-                    break
-
-            # Uncallable haplotype evidence
-            in_uncallable = False
-            for haplotype in match_result.get('uncallable_haplotypes', []):
-                if variant['rsid'] in haplotype:
-                    importance += 2
-                    explanation.append(f"Prevents calling {haplotype}")
-                    in_uncallable = True
-                    break
-
-            # Missing position evidence
-            in_missing_positions = False
-            for missing in match_result.get('missing_positions', []):
-                if missing.get('rsid') == variant['rsid']:
-                    importance += 1
-                    explanation.append("Missing data affects phenotype predictions")
-                    in_missing_positions = True
-                    break
-
-            # Report evidence
-            in_gene_report = False
-            if gene_report:
-                for report_variant in gene_report.get('variants', []):
-                    if report_variant.get('rsid') == variant['rsid']:
-                        importance += 2
-                        explanation.append("Referenced in final phenotype report")
-                        in_gene_report = True
-                        break
-
-            # Genotype evidence
-            if variant['genotype'] == '0/1':
-                importance += 1
-                explanation.append("Heterozygous variant (one altered copy)")
-            elif variant['genotype'] == '1/1':
-                importance += 2
-                explanation.append("Homozygous alternate (two altered copies)")
-
-            # Phasing evidence
-            is_phased = False
-            for match_variant in match_result.get('variants', []):
-                if match_variant.get('rsid') == variant['rsid'] and match_variant.get('phased', False):
-                    importance += 1
-                    explanation.append("Phased variant (precise haplotype determination)")
-                    is_phased = True
-                    break
-
-            # Phenotype impact evidence
-            phenotypes = []
-            if gene_report:
-                for diplotype in gene_report.get('diplotypes', []):
-                    phenotypes.extend(diplotype.get('phenotypes', []))
-
-            has_distinct_phenotype = False
-            if phenotypes and "Unknown" not in phenotypes and "No Result" not in phenotypes:
-                if in_match_variants or in_gene_report:
-                    importance += 1
-                    explanation.append("Contributes to a definitive phenotype prediction")
-                    has_distinct_phenotype = True
-
-            # Position factor for uniqueness
-            pos_factor = 0.01 * (hash(str(variant['pos'])) % 100) / 100
-            importance += pos_factor
-
-            if importance > 0:
-                importance_scores.append({
-                    'gene': gene,
-                    'rsid': variant['rsid'],
-                    'pos': variant['pos'],
-                    'ref': variant['ref'],
-                    'alt': variant['alt'],
-                    'genotype': variant['genotype'],
-                    'importance': round(importance, 2),
-                    'explanation': "; ".join(explanation),
-                    'phenotypes': list(set(phenotypes)) if phenotypes else ["Unknown"],
-                    'in_match': in_match_variants,
-                    'in_diplotype': in_diplotype,
-                    'in_report': in_gene_report,
-                    'uncallable': in_uncallable,
-                    'missing': in_missing_positions,
-                    'phased': is_phased,
-                    'has_phenotype': has_distinct_phenotype
-                })
-
-        self.variant_importance = pd.DataFrame(importance_scores)
-        return self.variant_importance
-
-    def generate_summaries(self):
-        if self.match_data is None:
-            return []
-
-        if self.variant_importance is None and self.vcf_file:
-            self.calculate_variant_importance()
-
-        summaries = []
-        processed_genes = set()
-
-        gene_function_map = {
-            "CYP2D6": "metabolizes approximately 25% of clinically used drugs including antidepressants, antipsychotics, opioids, and beta blockers",
-            "CYP2C19": "involved in the metabolism of several important drug classes including proton pump inhibitors, antiplatelet drugs, and antidepressants",
-            "CYP2C9": "metabolizes many drugs including warfarin, NSAIDs, and some antidiabetics",
-            "CYP3A4": "metabolizes more than 50% of clinically used drugs, including statins, calcium channel blockers, and many others",
-            "CYP3A5": "metabolizes approximately 50% of clinically used drugs, particularly important for immunosuppressants like tacrolimus",
-            "CYP4F2": "involved in vitamin K metabolism, affects warfarin dose requirements",
-            "DPYD": "metabolizes fluoropyrimidine drugs like 5-fluorouracil (5-FU)",
-            "SLCO1B1": "mediates the uptake of various drugs into hepatocytes, especially statins",
-            "TPMT": "metabolizes thiopurine drugs like azathioprine and mercaptopurine",
-            "UGT1A1": "responsible for bilirubin conjugation and metabolism of certain drugs including irinotecan",
-            "VKORC1": "encodes the target of warfarin and other vitamin K antagonists used as anticoagulants",
-            "NUDT15": "involved in metabolism of thiopurine drugs",
-            "G6PD": "involved in the hexose monophosphate shunt, deficiency can lead to hemolytic anemia with certain drugs",
-            "CFTR": "encodes a chloride channel protein, mutations cause cystic fibrosis",
-            "IFNL3": "involved in immune response, affects hepatitis C treatment response",
-            "ABCG2": "transporter protein involved in drug disposition and multidrug resistance",
-            "CACNA1S": "calcium channel subunit, mutations associated with malignant hyperthermia susceptibility"
+        gene_data[gene] = {
+            'phenotype': phenotype,
+            'diplotype': diplotype,
+            'allele1': allele1,
+            'allele2': allele2,
+            'variants': list(set(variants))
         }
 
-        # Process genes with variants if we have variant importance data
-        if self.variant_importance is not None and not self.variant_importance.empty:
-            for gene, group in tqdm(self.variant_importance.groupby('gene'), desc="Generating gene summaries"):
-                # Skip genes not in focus list
-                if self.focus_genes and gene not in self.focus_genes:
-                    continue
+    return gene_data
 
-                processed_genes.add(gene)
 
-                gene_report = next((r for r in self.phenotype_data if r['gene_symbol'] == gene), None)
-                match_result = next((r for r in self.match_data if r['gene'] == gene), None)
+def get_ground_truth(ground_truth_file, target_genes):
+    """Extract ground truth phenotypes from the ground truth file."""
+    ground_truth = {}
 
-                phenotypes = []
-                if gene_report:
-                    for diplotype in gene_report.get('diplotypes', []):
-                        phenotypes.extend(diplotype.get('phenotypes', []))
+    try:
+        gt_df = pd.read_csv(ground_truth_file)
 
-                diplotypes = []
-                if match_result:
-                    for diplotype in match_result.get('diplotypes', []):
-                        diplotypes.append(diplotype.get('name', 'Unknown'))
+        # Assuming the first row contains our sample data
+        sample_row = gt_df.iloc[0]
 
-                phenotype_str = ", ".join(set(phenotypes)) if phenotypes else "Unknown"
-                diplotype_str = ", ".join(diplotypes) if diplotypes else "Unknown"
-
-                gene_function = gene_function_map.get(gene, "affects drug metabolism or response")
-
-                gene_summary = {
-                    'gene': gene,
-                    'phenotypes': list(set(phenotypes)),
-                    'diplotypes': diplotypes,
-                    'summary': f"Gene: {gene}\n"
-                               f"Function: {gene_function}\n"
-                               f"Diplotype(s): {diplotype_str}\n"
-                               f"Phenotype(s): {phenotype_str}\n"
-                               f"Number of important variants: {len(group)}\n"
-                }
-
-                if match_result:
-                    phasing_status = "Phased" if match_result.get('phased', False) else "Unphased"
-                    homozygous = "Homozygous" if match_result.get('match_data_homozygous', False) else "Heterozygous"
-                    gene_summary['summary'] += f"Phasing status: {phasing_status}\n"
-                    gene_summary['summary'] += f"Zygosity: {homozygous}\n"
-
-                clinical_significance = self.get_clinical_significance(gene, phenotypes)
-                if clinical_significance:
-                    gene_summary['summary'] += f"Clinical Significance: {clinical_significance}\n"
-
-                if not group.empty:
-                    variant_details = []
-                    for _, variant in group.sort_values('importance', ascending=False).iterrows():
-                        genotype_desc = "homozygous reference (0/0)" if variant['genotype'] == '0/0' else \
-                            "heterozygous (0/1)" if variant['genotype'] == '0/1' else \
-                                "homozygous alternate (1/1)" if variant['genotype'] == '1/1' else \
-                                    variant['genotype']
-
-                        variant_impact = self.get_variant_impact(gene, variant['rsid'], variant['genotype'])
-                        impact_text = f"\n  Clinical Impact: {variant_impact}" if variant_impact else ""
-
-                        phased_text = " (phased)" if variant.get('phased', False) else ""
-
-                        variant_detail = f"- {variant['rsid']} ({variant['ref']} to {variant['alt']}): {genotype_desc}{phased_text}\n" \
-                                         f"  Importance Score: {variant['importance']}\n" \
-                                         f"  Reason: {variant['explanation']}{impact_text}"
-                        variant_details.append(variant_detail)
-
-                    gene_summary['summary'] += "\nImportant variants:\n" + "\n\n".join(variant_details)
-
-                if match_result and match_result.get('haplotypes'):
-                    haplotype_info = []
-                    for haplotype in match_result['haplotypes']:
-                        reference_status = " (reference)" if haplotype.get('reference', False) else ""
-                        haplotype_info.append(f"{haplotype.get('name', 'Unknown')}{reference_status}")
-
-                    if haplotype_info:
-                        gene_summary['summary'] += "\n\nIdentified haplotypes:\n- " + "\n- ".join(haplotype_info)
-
-                if match_result and match_result.get('uncallable_haplotypes'):
-                    gene_summary['summary'] += "\n\nUncallable haplotypes:\n- " + "\n- ".join(
-                        match_result['uncallable_haplotypes'])
-
-                if match_result and match_result.get('missing_positions'):
-                    missing_positions = []
-                    for pos in match_result['missing_positions']:
-                        rsid = pos.get('rsid', 'unknown')
-                        position = pos.get('position', 'unknown')
-                        missing_positions.append(f"{rsid} at position {position}")
-
-                    if missing_positions:
-                        gene_summary['summary'] += "\n\nMissing positions:\n- " + "\n- ".join(missing_positions)
-
-                gene_summary['summary'] += "\n\nExplanation:\n"
-                if group.empty and match_result and not match_result.get(
-                        'uncallable_haplotypes') and not match_result.get(
-                    'missing_positions'):
-                    gene_summary[
-                        'summary'] += f"No significant variants or uncallable haplotypes found for this gene. {gene} {gene_function}, but no variants affecting function were detected in this sample."
-                elif group.empty and match_result and (
-                        match_result.get('uncallable_haplotypes') or match_result.get('missing_positions')):
-                    gene_summary[
-                        'summary'] += f"The phenotype determination for {gene} is affected by missing data (uncallable haplotypes or missing positions). {gene} {gene_function}, but complete phenotype prediction is not possible due to missing genetic information."
-                else:
-                    gene_summary[
-                        'summary'] += f"The {phenotype_str} phenotype for {gene} is determined by the presence of the variants listed above. {gene} {gene_function}."
-                    if clinical_significance:
-                        gene_summary['summary'] += f" {clinical_significance}"
-                    if match_result and (
-                            match_result.get('uncallable_haplotypes') or match_result.get('missing_positions')):
-                        gene_summary[
-                            'summary'] += " Additionally, there are uncallable haplotypes or missing positions which affect the confidence of this determination."
-
-                summaries.append(gene_summary)
-
-        # Process remaining genes from match data
-        for match_result in tqdm(self.match_data, desc="Processing remaining genes"):
-            gene = match_result['gene']
-            if gene in processed_genes:
-                continue
-
-            # Skip genes not in focus list
-            if self.focus_genes and gene not in self.focus_genes:
-                continue
-
-            gene_report = next((r for r in self.phenotype_data if r['gene_symbol'] == gene), None)
-
-            phenotypes = []
-            if gene_report:
-                for diplotype in gene_report.get('diplotypes', []):
-                    phenotypes.extend(diplotype.get('phenotypes', []))
-
-            diplotypes = []
-            for diplotype in match_result.get('diplotypes', []):
-                diplotypes.append(diplotype.get('name', 'Unknown'))
-
-            phenotype_str = ", ".join(set(phenotypes)) if phenotypes else "Unknown"
-            diplotype_str = ", ".join(diplotypes) if diplotypes else "Unknown"
-
-            gene_function = gene_function_map.get(gene, "affects drug metabolism or response")
-
-            gene_summary = {
-                'gene': gene,
-                'phenotypes': list(set(phenotypes)),
-                'diplotypes': diplotypes,
-                'summary': f"Gene: {gene}\n"
-                           f"Function: {gene_function}\n"
-                           f"Diplotype(s): {diplotype_str}\n"
-                           f"Phenotype(s): {phenotype_str}\n"
-                           f"Number of important variants: 0\n"
-            }
-
-            phasing_status = "Phased" if match_result.get('phased', False) else "Unphased"
-            homozygous = "Homozygous" if match_result.get('match_data_homozygous', False) else "Heterozygous"
-            gene_summary['summary'] += f"Phasing status: {phasing_status}\n"
-            gene_summary['summary'] += f"Zygosity: {homozygous}\n"
-
-            clinical_significance = self.get_clinical_significance(gene, phenotypes)
-            if clinical_significance:
-                gene_summary['summary'] += f"Clinical Significance: {clinical_significance}\n"
-
-            if match_result.get('haplotypes'):
-                haplotype_info = []
-                for haplotype in match_result['haplotypes']:
-                    reference_status = " (reference)" if haplotype.get('reference', False) else ""
-                    haplotype_info.append(f"{haplotype.get('name', 'Unknown')}{reference_status}")
-
-                if haplotype_info:
-                    gene_summary['summary'] += "\n\nIdentified haplotypes:\n- " + "\n- ".join(haplotype_info)
-
-            if match_result.get('uncallable_haplotypes'):
-                gene_summary['summary'] += "\n\nUncallable haplotypes:\n- " + "\n- ".join(
-                    match_result['uncallable_haplotypes'])
-
-            if match_result.get('missing_positions'):
-                missing_positions = []
-                for pos in match_result['missing_positions']:
-                    rsid = pos.get('rsid', 'unknown')
-                    position = pos.get('position', 'unknown')
-                    missing_positions.append(f"{rsid} at position {position}")
-
-                if missing_positions:
-                    gene_summary['summary'] += "\n\nMissing positions:\n- " + "\n- ".join(missing_positions)
-
-            if match_result.get('variants'):
-                gene_summary['summary'] += "\n\nVariants considered:\n"
-                for variant in match_result['variants']:
-                    rsid = variant.get('rsid', 'unknown')
-                    call = variant.get('call', 'unknown')
-                    phased_status = " (phased)" if variant.get('phased', False) else ""
-                    gene_summary['summary'] += f"- {rsid}: {call}{phased_status}\n"
-
-            gene_summary['summary'] += "\n\nExplanation:\n"
-            if not match_result.get('uncallable_haplotypes') and not match_result.get('missing_positions'):
-                gene_summary[
-                    'summary'] += f"No significant variants found for this gene in the input data. {gene} {gene_function}, but no variants affecting function were detected in this sample."
+        for gene in target_genes:
+            if gene in gt_df.columns:
+                ground_truth[gene] = sample_row[gene]
             else:
-                gene_summary[
-                    'summary'] += f"The phenotype determination for {gene} is affected by missing data (uncallable haplotypes or missing positions). {gene} {gene_function}, but complete phenotype prediction is not possible due to missing genetic information."
+                ground_truth[gene] = "Unknown"
+    except Exception as e:
+        print(f"Error reading ground truth file: {e}")
+        # Set defaults if file read fails
+        for gene in target_genes:
+            ground_truth[gene] = "Unknown"
 
-            summaries.append(gene_summary)
+    return ground_truth
 
-        self.gene_summaries = summaries
-        return summaries
 
-    def get_clinical_significance(self, gene, phenotypes):
-        if not phenotypes or phenotypes == ["Unknown"] or phenotypes == ["No Result"]:
-            return ""
+def run_shap_analysis(synthetic_samples, pharmcat_data, ground_truth, vcf_df):
+    """Perform SHAP analysis on the synthetic data."""
+    results = {}
 
-        if gene == "CYP2D6":
-            if "Poor Metabolizer" in phenotypes:
-                return "Poor metabolizers may require dose reductions for affected drugs or alternative medications."
-            elif "Intermediate Metabolizer" in phenotypes:
-                return "Intermediate metabolizers may have reduced efficacy with prodrugs like codeine or tamoxifen."
-            elif "Ultrarapid Metabolizer" in phenotypes:
-                return "Ultrarapid metabolizers may experience treatment failure at standard doses of affected drugs."
+    for gene, gene_info in pharmcat_data.items():
+        print(f"Analyzing gene: {gene}")
 
-        elif gene == "CYP2C19":
-            if "Poor Metabolizer" in phenotypes:
-                return "Poor metabolizers may have reduced efficacy with clopidogrel and increased exposure to PPIs."
-            elif "Rapid Metabolizer" in phenotypes or "Ultrarapid Metabolizer" in phenotypes:
-                return "Rapid/ultrarapid metabolizers may have increased efficacy with clopidogrel and reduced exposure to PPIs."
+        # Get variants for this gene
+        gene_variants = vcf_df[vcf_df['gene'] == gene]
 
-        elif gene == "CYP2C9":
-            if "Poor Metabolizer" in phenotypes:
-                return "Poor metabolizers may require lower doses of warfarin, NSAIDs, and may have increased risk of side effects."
-            elif "Intermediate Metabolizer" in phenotypes:
-                return "Intermediate metabolizers may have altered response to warfarin and other CYP2C9 substrates."
+        # Get columns for this gene
+        gene_columns = [col for col in synthetic_samples.columns if col.startswith(f"{gene}_")]
 
-        elif gene == "CYP3A4":
-            if "Poor Metabolizer" in phenotypes:
-                return "Poor metabolizers may have increased exposure to many drugs including statins, benzodiazepines, and antidepressants."
-            elif "Increased Function" in phenotypes:
-                return "Increased function may lead to reduced efficacy of CYP3A4 substrate drugs."
+        if not gene_columns:
+            print(f"  No features found for {gene}, skipping...")
+            continue
 
-        elif gene == "SLCO1B1":
-            if "Decreased Function" in phenotypes or "Poor Function" in phenotypes:
-                return "Decreased function may lead to higher statin exposure and increased risk of myopathy."
+        # Prepare X data
+        X = synthetic_samples[gene_columns].copy()
 
-        elif gene == "DPYD":
-            if "Poor Metabolizer" in phenotypes or "Intermediate Metabolizer" in phenotypes:
-                return "Reduced DPYD function increases risk of severe toxicity with fluoropyrimidine drugs (5-FU, capecitabine). Dose reduction or alternative therapy may be required."
+        # For each sample, simulate whether it would get the same phenotype as the original
+        # This is a simplified simulation based on similarity to the original
+        y = []
+        original_sample = synthetic_samples.iloc[0]
 
-        elif gene == "VKORC1":
-            if "Low Warfarin Sensitivity" in phenotypes:
-                return "Lower sensitivity may require higher warfarin doses to achieve therapeutic anticoagulation."
-            elif "High Warfarin Sensitivity" in phenotypes:
-                return "Higher sensitivity may require lower warfarin doses to avoid over-anticoagulation."
-
-        elif gene == "CYP3A5":
-            if "Poor Metabolizer" in phenotypes:
-                return "Poor metabolizers generally require lower doses of tacrolimus, cyclosporine, and other affected drugs."
-            elif "Intermediate Metabolizer" in phenotypes or "Normal Metabolizer" in phenotypes:
-                return "Normal/intermediate metabolizers may require higher doses of tacrolimus and similar drugs."
-
-        elif gene == "UGT1A1":
-            if "*28/*28" in str(phenotypes) or "Poor Metabolizer" in phenotypes:
-                return "Reduced function may increase risk of irinotecan toxicity and unconjugated hyperbilirubinemia."
-
-        elif gene == "TPMT":
-            if "Poor Metabolizer" in phenotypes:
-                return "Poor metabolizers are at high risk for severe myelosuppression with standard doses of thiopurines. Substantial dose reduction required."
-            elif "Intermediate Metabolizer" in phenotypes:
-                return "Intermediate metabolizers may require moderate dose reduction of thiopurines to avoid toxicity."
-
-        if any(p for p in phenotypes if "Poor" in p and "Metabolizer" in p):
-            return "Poor metabolizer status may require dose adjustments for affected medications."
-        elif any(p for p in phenotypes if "Intermediate" in p and "Metabolizer" in p):
-            return "Intermediate metabolizer status may require monitoring for efficacy and side effects."
-        elif any(p for p in phenotypes if "Ultrarapid" in p and "Metabolizer" in p):
-            return "Ultrarapid metabolizer status may require dose increases or alternative medications."
-
-        return ""
-
-    def get_variant_impact(self, gene, rsid, genotype):
-        impact_map = {
-            ("CYP2B6", "rs3745274", "0/1"): "May reduce metabolism of CYP2B6 substrates",
-            ("CYP2B6", "rs3745274", "1/1"): "Significantly reduces metabolism of CYP2B6 substrates",
-            ("CYP2B6", "rs2279343", "0/1"): "May alter CYP2B6 activity",
-            ("CYP2B6", "rs2279343", "1/1"): "Associated with altered metabolism of CYP2B6 substrates",
-            ("CYP2C19", "rs4244285", "0/1"): "Reduced function, may impair clopidogrel activation",
-            ("CYP2C19", "rs4244285", "1/1"): "Loss of function, significantly impairs clopidogrel activation",
-            ("CYP2C19", "rs12248560", "0/1"): "Enhanced function, may increase clopidogrel response",
-            ("CYP2C19", "rs12248560", "1/1"): "Significantly enhanced function, increases clopidogrel response",
-            ("CYP2C9", "rs1799853", "0/1"): "Reduced enzyme activity, may require lower doses of warfarin and NSAIDs",
-            ("CYP2C9", "rs1799853", "1/1"): "Significantly reduced enzyme activity, higher risk of adverse effects",
-            ("CYP3A4", "rs55785340", "0/1"): "May alter metabolism of statins, tacrolimus, and other CYP3A4 substrates",
-            ("CYP3A4", "rs55785340", "1/1"): "Significantly affects metabolism of CYP3A4 substrate drugs",
-            ("CYP3A5", "rs776746", "0/1"): "Intermediate metabolizer, affects tacrolimus exposure",
-            ("CYP3A5", "rs776746", "1/1"): "Non-expresser (*3/*3), higher tacrolimus exposure",
-            ("SLCO1B1", "rs4149056", "0/1"): "Reduced transport, moderate increase in statin exposure",
-            ("SLCO1B1", "rs4149056", "1/1"): "Significantly reduced transport, higher risk of statin myopathy",
-            ("SLCO1B1", "rs2306283", "0/1"): "Possible increased transporter activity",
-            ("TPMT", "rs144041067", "0/1"): "Reduced enzyme activity, moderate risk of thiopurine toxicity",
-            ("TPMT", "rs144041067", "1/1"): "Significantly reduced activity, high risk of thiopurine toxicity",
-            ("DPYD", "rs3918290", "0/1"): "Reduced enzyme activity, increased risk of fluoropyrimidine toxicity",
-            ("DPYD", "rs3918290", "1/1"): "Complete enzyme deficiency, severe fluoropyrimidine toxicity risk",
-            ("VKORC1", "rs9923231", "0/1"): "Intermediate warfarin sensitivity",
-            ("VKORC1", "rs9923231", "1/1"): "High warfarin sensitivity, lower dose requirements",
-            ("UGT1A1", "rs887829", "0/1"): "Reduced enzyme activity, moderate risk of toxicity",
-            ("UGT1A1", "rs887829", "1/1"): "Significantly reduced activity, higher risk of toxicity",
-            ("UGT1A1", "rs3064744", "0/1"): "Reduced enzyme activity, may affect irinotecan metabolism",
-            ("UGT1A1", "rs3064744", "1/1"): "Significant reduction in enzyme activity, higher toxicity risk",
-            ("CYP4F2", "rs2108622", "0/1"): "Moderately decreased vitamin K metabolism, affects warfarin dosing",
-            ("CYP4F2", "rs2108622", "1/1"): "Significantly decreased vitamin K metabolism, higher warfarin dose needs"
-        }
-
-        return impact_map.get((gene, rsid, genotype), "")
-
-    def visualize_importance(self):
-        if self.variant_importance is None or self.variant_importance.empty:
-            return
-
-        # Create the overall importance plot
-        plt.figure(figsize=(14, 8))
-        sorted_data = self.variant_importance.sort_values('importance', ascending=False)
-        bars = sns.barplot(data=sorted_data, x='rsid', y='importance', hue='gene')
-        plt.title("Data-Driven Variant Importance for Phenotype Predictions", fontsize=16)
-        plt.xlabel("Variant (rsID)", fontsize=12)
-        plt.ylabel("Importance Score", fontsize=12)
-        plt.xticks(rotation=45, ha='right')
-        plt.legend(title="Gene", fontsize=10)
-
-        for i, bar in enumerate(bars.patches):
-            bars.text(
-                bar.get_x() + bar.get_width() / 2.,
-                bar.get_height() + 0.1,
-                f"{bar.get_height():.2f}",
-                ha='center', fontsize=9
+        for _, sample in synthetic_samples.iterrows():
+            # Count how many variants match the original sample
+            matching_variants = sum(
+                1 for col in gene_columns
+                if sample[col] == original_sample[col] and not np.isnan(sample[col])
+            )
+            total_variants = sum(
+                1 for col in gene_columns
+                if not np.isnan(original_sample[col])
             )
 
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, "overall_variant_importance.png"), dpi=150)
-        plt.close()
-
-    def generate_html_report(self):
-        if self.gene_summaries is None:
-            self.generate_summaries()
-
-        with open(os.path.join(self.output_dir, "pharmcat_xai_report.html"), 'w', encoding='utf-8') as f:
-            f.write("""
-            <html>
-            <head>
-                <title>PharmCAT XAI Report</title>
-                <meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px 40px; line-height: 1.6; }
-                    h1, h2, h3 { color: #2c3e50; }
-                    .gene-section { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; border-radius: 5px; }
-                    .variant-info { margin-left: 20px; margin-bottom: 15px; position: relative; }
-                    .importance-bar { 
-                        height: 8px; 
-                        background-color: #3498db; 
-                        margin-top: 5px;
-                        border-radius: 4px;
-                    }
-                    .explanation { background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; }
-                    .missing { color: #dc3545; }
-                    .present { color: #28a745; }
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                    th { background-color: #f2f2f2; }
-                    tr:nth-child(even) { background-color: #f9f9f9; }
-                    .tooltip { position: relative; display: inline-block; cursor: pointer; border-bottom: 1px dotted #666; }
-                    .tooltip .tooltiptext { 
-                        visibility: hidden; 
-                        width: 300px; 
-                        background-color: #555; 
-                        color: #fff; 
-                        text-align: left; 
-                        border-radius: 6px; 
-                        padding: 10px; 
-                        position: absolute; 
-                        z-index: 1; 
-                        bottom: 125%; 
-                        left: 50%; 
-                        margin-left: -150px; 
-                        opacity: 0; 
-                        transition: opacity 0.3s; 
-                    }
-                    .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; }
-                    .badge {
-                        display: inline-block;
-                        padding: 3px 7px;
-                        font-size: 12px;
-                        font-weight: bold;
-                        line-height: 1;
-                        color: #fff;
-                        text-align: center;
-                        white-space: nowrap;
-                        vertical-align: baseline;
-                        border-radius: 10px;
-                        margin-left: 5px;
-                    }
-                    .badge-high { background-color: #dc3545; }
-                    .badge-medium { background-color: #fd7e14; }
-                    .badge-low { background-color: #6c757d; }
-                    .focus-gene { background-color: #e3f2fd; }
-                </style>
-            </head>
-            <body>
-                <h1>PharmCAT XAI Report</h1>
-                <p>This report explains how genetic variants influence pharmacogenomic phenotype predictions made by PharmCAT, focusing on key pharmacogenes.</p>
-            """)
-
-            f.write("""
-                <div class="explanation">
-                    <h3>How to Read Importance Scores</h3>
-                    <p>Importance scores indicate how much each variant contributes to the phenotype prediction based on <strong>data-driven analysis</strong> of PharmCAT's behavior:</p>
-                    <ul>
-                        <li><strong>Base evidence (1.0)</strong>: Every variant found in the VCF gets this score</li>
-                        <li><strong>Gene of interest (0.5)</strong>: Additional score for pharmacogenes of particular importance</li>
-                        <li><strong>Matching evidence (2.0)</strong>: Variant is directly used in PharmCAT's haplotype matching</li>
-                        <li><strong>Diplotype evidence (1.5)</strong>: Variant contributes to specific diplotype call</li>
-                        <li><strong>Uncallable haplotype evidence (2.0)</strong>: Variant prevents calling specific haplotypes</li>
-                        <li><strong>Missing position evidence (1.0)</strong>: Missing data affects available haplotype calls</li>
-                        <li><strong>Report evidence (2.0)</strong>: Variant is referenced in the final phenotype report</li>
-                        <li><strong>Genotype evidence</strong>: Heterozygous (1.0) or Homozygous alternate (2.0)</li>
-                        <li><strong>Phasing evidence (1.0)</strong>: Phased variants provide precise haplotype information</li>
-                        <li><strong>Phenotype impact (1.0)</strong>: Contributes to a definitive phenotype prediction</li>
-                    </ul>
-                    <p>Higher scores (5.0+) indicate variants that significantly influence PharmCAT's phenotype determination.</p>
-                </div>
-            """)
-
-            # Display focus genes
-            if self.focus_genes:
-                f.write("""
-                    <div class="explanation">
-                        <h3>Focus Genes</h3>
-                        <p>This analysis is focused on the following pharmacogenomic genes of interest:</p>
-                        <ul>
-                """)
-                for gene in self.focus_genes:
-                    f.write(f"<li><strong>{gene}</strong></li>")
-                f.write("""
-                        </ul>
-                    </div>
-                """)
-
-            # Summary table
-            f.write("""
-                <h2>Gene Summary</h2>
-                <table>
-                    <tr>
-                        <th>Gene</th>
-                        <th>Diplotype(s)</th>
-                        <th>Phenotype(s)</th>
-                        <th>Important Variants</th>
-                        <th>Phasing Status</th>
-                        <th>Missing Data</th>
-                    </tr>
-            """)
-
-            all_variants = self.variant_importance if self.variant_importance is not None else pd.DataFrame()
-
-            for summary in self.gene_summaries:
-                gene = summary['gene']
-                phenotypes = ", ".join(summary['phenotypes']) if summary['phenotypes'] else "Unknown"
-                diplotypes = ", ".join(summary['diplotypes']) if summary['diplotypes'] else "Unknown"
-
-                match_result = next((r for r in self.match_data if r['gene'] == gene), None)
-                has_missing_data = False
-                if match_result and (
-                        match_result.get('uncallable_haplotypes') or match_result.get('missing_positions')):
-                    has_missing_data = True
-
-                gene_variants = all_variants[all_variants['gene'] == gene] if not all_variants.empty else pd.DataFrame()
-                variants_count = len(gene_variants)
-
-                phasing_status = "Phased" if match_result and match_result.get('phased') else "Unphased"
-
-                # Add a class to highlight focus genes
-                focus_class = " focus-gene" if gene in self.focus_genes else ""
-
-                f.write(f"""
-                    <tr class="{focus_class}">
-                        <td>{gene}</td>
-                        <td>{diplotypes}</td>
-                        <td>{phenotypes}</td>
-                        <td class="{'present' if variants_count > 0 else ''}">{variants_count}</td>
-                        <td>{phasing_status}</td>
-                        <td class="{'missing' if has_missing_data else ''}">{('Yes' if has_missing_data else 'No')}</td>
-                    </tr>
-                """)
-
-            f.write("</table>")
-
-            # Gene details
-            for summary in self.gene_summaries:
-                gene = summary['gene']
-                # Add a class to highlight focus genes
-                focus_class = " focus-gene" if gene in self.focus_genes else ""
-
-                f.write(f"""
-                    <div class="gene-section{focus_class}">
-                        <h2>Gene: {gene}</h2>
-                        <p><strong>Diplotype(s):</strong> {', '.join(summary['diplotypes']) if summary['diplotypes'] else 'Unknown'}</p>
-                        <p><strong>Phenotype(s):</strong> {', '.join(summary['phenotypes']) if summary['phenotypes'] else 'Unknown'}</p>
-                """)
-
-                match_result = next((r for r in self.match_data if r['gene'] == gene), None)
-                if match_result:
-                    phasing_status = "Phased" if match_result.get('phased', False) else "Unphased"
-                    homozygous = "Homozygous" if match_result.get('match_data_homozygous', False) else "Heterozygous"
-                    f.write(f"<p><strong>Phasing status:</strong> {phasing_status}</p>")
-                    f.write(f"<p><strong>Zygosity:</strong> {homozygous}</p>")
-
-                # Get variants for this gene
-                gene_variants = all_variants[all_variants['gene'] == gene] if not all_variants.empty else pd.DataFrame()
-
-                if not gene_variants.empty:
-                    f.write("<h3>Important Variants:</h3>")
-
-                    max_importance = gene_variants['importance'].max() if len(gene_variants) > 0 else 0
-
-                    for _, variant in gene_variants.sort_values('importance', ascending=False).iterrows():
-                        genotype_desc = "homozygous reference (0/0)" if variant['genotype'] == '0/0' else \
-                            "heterozygous (0/1)" if variant['genotype'] == '0/1' else \
-                                "homozygous alternate (1/1)" if variant['genotype'] == '1/1' else \
-                                    variant['genotype']
-
-                        variant_impact = self.get_variant_impact(gene, variant['rsid'], variant['genotype'])
-                        impact_html = f"<br><strong>Clinical Impact:</strong> {variant_impact}" if variant_impact else ""
-
-                        if variant['importance'] >= 7:
-                            badge_class = "badge-high"
-                            importance_level = "High"
-                        elif variant['importance'] >= 5:
-                            badge_class = "badge-medium"
-                            importance_level = "Medium"
-                        else:
-                            badge_class = "badge-low"
-                            importance_level = "Low"
-
-                        bar_width = (variant['importance'] / max(max_importance, 8)) * 100
-
-                        evidence_badges = ""
-                        if variant.get('in_match'):
-                            evidence_badges += '<span class="badge" style="background-color:#2ecc71">Match</span> '
-                        if variant.get('in_diplotype'):
-                            evidence_badges += '<span class="badge" style="background-color:#9b59b6">Diplotype</span> '
-                        if variant.get('in_report'):
-                            evidence_badges += '<span class="badge" style="background-color:#3498db">Report</span> '
-                        if variant.get('uncallable'):
-                            evidence_badges += '<span class="badge" style="background-color:#e74c3c">Uncallable</span> '
-                        if variant.get('missing'):
-                            evidence_badges += '<span class="badge" style="background-color:#f39c12">Missing</span> '
-                        if variant.get('phased'):
-                            evidence_badges += '<span class="badge" style="background-color:#1abc9c">Phased</span> '
-                        if variant.get('has_phenotype'):
-                            evidence_badges += '<span class="badge" style="background-color:#9b59b6">Phenotype</span> '
-
-                        f.write(f"""
-                            <div class="variant-info">
-                                <p>
-                                    <strong>{variant['rsid']}</strong> 
-                                    <span class="badge {badge_class}">{importance_level}</span>
-                                    <span class="tooltip">[?]
-                                        <span class="tooltiptext">
-                                            Importance score components:<br>
-                                            {variant['explanation'].replace('; ', '<br>')}
-                                        </span>
-                                    </span>
-                                    <br>
-                                    <strong>Importance Score:</strong> {variant['importance']:.2f}
-                                    <div class="importance-bar" style="width: {bar_width}%;"></div>
-                                    <br>
-                                    <strong>Genotype:</strong> {variant['ref']} to {variant['alt']} - {genotype_desc}
-                                    {impact_html}
-                                    <br><br>
-                                    <strong>Evidence Types:</strong> {evidence_badges}
-                                </p>
-                            </div>
-                        """)
-                else:
-                    f.write("<p>No significant variants found for this gene.</p>")
-
-                # Add haplotype information
-                if match_result and match_result.get('haplotypes'):
-                    f.write("<h3>Identified Haplotypes:</h3><ul>")
-                    for haplotype in match_result['haplotypes']:
-                        reference_status = " (reference)" if haplotype.get('reference', False) else ""
-                        f.write(f"<li>{haplotype.get('name', 'Unknown')}{reference_status}</li>")
-                    f.write("</ul>")
-
-                # Add uncallable haplotypes
-                if match_result and match_result.get('uncallable_haplotypes'):
-                    f.write("<h3>Uncallable Haplotypes:</h3><ul>")
-                    for haplotype in match_result['uncallable_haplotypes']:
-                        f.write(f"<li>{haplotype}</li>")
-                    f.write("</ul>")
-
-                # Add missing positions
-                if match_result and match_result.get('missing_positions'):
-                    f.write("<h3>Missing Positions:</h3><ul>")
-                    for pos in match_result['missing_positions']:
-                        rsid = pos.get('rsid', 'unknown')
-                        position = pos.get('position', 'unknown')
-                        f.write(f"<li>{rsid} at position {position}</li>")
-                    f.write("</ul>")
-
-                # Add explanation section
-                f.write("<h3>Explanation:</h3>")
-                explanation_text = summary['summary'].split("Explanation:\n")[1] if "Explanation:\n" in summary[
-                    'summary'] else ""
-                f.write(f"""<div class="explanation"><p>{explanation_text}</p></div>""")
-
-                f.write("</div>")  # Close gene-section
-
-            # Add overall importance plot if it exists
-            if os.path.exists(os.path.join(self.output_dir, "overall_variant_importance.png")):
-                f.write("""
-                    <h2>Overall Variant Importance</h2>
-                    <img src="overall_variant_importance.png" alt="Overall variant importance" style="max-width:100%;">
-                """)
-
-            f.write("""
-                <hr>
-                <footer>
-                    <p><em>This report was generated using PharmCAT XAI Explainer to analyze pharmacogenomic predictions.</em></p>
-                </footer>
-            </body>
-            </html>
-            """)
-
-    def run(self):
-        try:
-            print(f"Starting PharmCAT XAI analysis on {len(self.focus_genes)} genes...")
-
-            if self.vcf_file:
-                self.parse_vcf()
-
-            if self.match_json_file:
-                self.load_match_data()
-
-            if self.phenotype_json_file:
-                self.load_phenotype_data()
-
-            self.generate_summaries()
-
-            if self.vcf_file:
-                self.calculate_variant_importance()
-                self.visualize_importance()
-
-            self.generate_html_report()
-
-            # Meaningful completion message
-            print(f"XAI analysis complete. Results saved to {self.output_dir}/pharmcat_xai_report.html")
-
-            return {
-                'vcf_data': self.vcf_data,
-                'match_data': self.match_data,
-                'phenotype_data': self.phenotype_data,
-                'variant_importance': self.variant_importance,
-                'gene_summaries': self.gene_summaries,
-                'focus_genes': self.focus_genes
-            }
-        except Exception as e:
-            print(f"Error during XAI analysis: {str(e)}")
-            traceback.print_exc()
-            return {
-                'error': str(e),
-                'vcf_data': self.vcf_data,
-                'match_data': self.match_data,
-                'phenotype_data': self.phenotype_data,
-                'variant_importance': self.variant_importance,
-                'gene_summaries': self.gene_summaries
-            }
-
-    def find_file_sets(self, base_dir='pharmcat_processed'):
-        file_sets = []
-
-        if not os.path.exists(base_dir):
-            return file_sets
-
-        subdirs = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-
-        for subdir in subdirs:
-            subdir_path = os.path.join(base_dir, subdir)
-
-            for file in os.listdir(subdir_path):
-                if file.endswith('.preprocessed.vcf'):
-                    vcf_path = os.path.join(subdir_path, file)
-                    base_name = os.path.splitext(file)[0]
-                    match_json = os.path.join(subdir_path, f"{base_name}.match.json")
-                    phenotype_json = os.path.join(subdir_path, f"{base_name}.phenotype.json")
-
-                    if os.path.exists(match_json) and os.path.exists(phenotype_json):
-                        file_sets.append({
-                            'vcf_file': vcf_path,
-                            'match_json': match_json,
-                            'phenotype_json': phenotype_json,
-                            'sample_id': subdir
-                        })
-
-        return file_sets
-
-    def run_all(self, base_dir='pharmcat_processed'):
-        file_sets = self.find_file_sets(base_dir)
-        if not file_sets:
-            return None
-
-        print(f"Processing {len(file_sets)} PharmCAT sample sets...")
-
-        original_vcf = self.vcf_file
-        original_match = self.match_json_file
-        original_phenotype = self.phenotype_json_file
-        original_output_dir = self.output_dir
-
-        all_results = []
-        for file_set in tqdm(file_sets, desc="Processing samples"):
-            self.vcf_file = file_set['vcf_file']
-            self.match_json_file = file_set['match_json']
-            self.phenotype_json_file = file_set['phenotype_json']
-            self.output_dir = os.path.join(original_output_dir, file_set['sample_id'])
-
-            os.makedirs(self.output_dir, exist_ok=True)
-
-            self.vcf_data = None
-            self.match_data = None
-            self.phenotype_data = None
-            self.variant_importance = None
-            self.gene_summaries = None
-
-            results = self.run()
-            results['sample_id'] = file_set['sample_id']
-            all_results.append(results)
-
-        self.vcf_file = original_vcf
-        self.match_json_file = original_match
-        self.phenotype_json_file = original_phenotype
-        self.output_dir = original_output_dir
-
-        self.generate_unified_report(all_results)
-        print(f"Analysis complete. Unified report available at {self.output_dir}/unified_pharmcat_report.html")
-
-        return all_results
-
-    def generate_unified_report(self, all_results):
-        if not all_results:
-            return
-
-        os.makedirs(self.output_dir, exist_ok=True)
-        unified_report_path = os.path.join(self.output_dir, "unified_pharmcat_report.html")
-
-        with open(unified_report_path, 'w', encoding='utf-8') as f:
-            f.write("""
-            <html>
-            <head>
-                <title>Unified PharmCAT XAI Report</title>
-                <meta charset="UTF-8">
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 20px 40px; line-height: 1.6; }
-                    h1, h2, h3 { color: #2c3e50; }
-                    .sample-section { border: 1px solid #ddd; padding: 20px; margin-bottom: 30px; border-radius: 5px; }
-                    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
-                    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                    th { background-color: #f2f2f2; }
-                    tr:nth-child(even) { background-color: #f9f9f9; }
-                    .focus-gene { background-color: #e3f2fd; }
-                </style>
-            </head>
-            <body>
-                <h1>Unified PharmCAT XAI Report</h1>
-                <p>This report provides a comprehensive analysis of pharmacogenomic phenotype predictions across multiple samples.</p>
-            """)
-
-            if self.focus_genes:
-                f.write("<h2>Focus Genes</h2><ul>")
-                for gene in self.focus_genes:
-                    f.write(f"<li><strong>{gene}</strong></li>")
-                f.write("</ul>")
-
-            f.write('<h2>Cross-Sample Gene Summary</h2>')
-            f.write('<table><tr><th>Gene</th>')
-
-            for result in all_results:
-                f.write(f'<th>{result["sample_id"]}</th>')
-            f.write('</tr>')
-
-            for gene in self.focus_genes:
-                f.write(f'<tr><td class="focus-gene">{gene}</td>')
-
-                for result in all_results:
-                    gene_summaries = result.get('gene_summaries', [])
-                    gene_summary = next((s for s in gene_summaries if s['gene'] == gene), None)
-
-                    if gene_summary:
-                        phenotypes = ", ".join(gene_summary['phenotypes']) if gene_summary['phenotypes'] else "Unknown"
-                        diplotypes = ", ".join(gene_summary['diplotypes']) if gene_summary['diplotypes'] else "Unknown"
-                        cell_content = f"{diplotypes}<br>{phenotypes}"
-                    else:
-                        cell_content = "No data"
-
-                    f.write(f'<td>{cell_content}</td>')
-
-                f.write('</tr>')
-
-            f.write('</table>')
-
-            for result in all_results:
-                sample_id = result['sample_id']
-                gene_summaries = result.get('gene_summaries', [])
-
-                f.write(f'<div id="{sample_id}" class="sample-section">')
-                f.write(f'<h2>Sample: {sample_id}</h2>')
-
-                f.write('<h3>Gene Summary</h3>')
-                f.write("""
-                    <table>
-                        <tr>
-                            <th>Gene</th>
-                            <th>Diplotype(s)</th>
-                            <th>Phenotype(s)</th>
-                            <th>Important Variants</th>
-                            <th>Phasing Status</th>
-                        </tr>
-                """)
-
-                for gene_summary in gene_summaries:
-                    if gene_summary['gene'] not in self.focus_genes:
-                        continue
-
-                    gene = gene_summary['gene']
-                    phenotypes = ", ".join(gene_summary['phenotypes']) if gene_summary['phenotypes'] else "Unknown"
-                    diplotypes = ", ".join(gene_summary['diplotypes']) if gene_summary['diplotypes'] else "Unknown"
-
-                    match_data = result.get('match_data', [])
-                    match_result = next((r for r in match_data if r['gene'] == gene), None)
-                    phasing_status = "Phased" if match_result and match_result.get('phased') else "Unphased"
-
-                    variant_importance = result.get('variant_importance', pd.DataFrame())
-                    gene_variants = variant_importance[
-                        variant_importance['gene'] == gene] if not variant_importance.empty else pd.DataFrame()
-                    variants_count = len(gene_variants)
-
-                    f.write(f"""
-                        <tr class="focus-gene">
-                            <td>{gene}</td>
-                            <td>{diplotypes}</td>
-                            <td>{phenotypes}</td>
-                            <td>{variants_count}</td>
-                            <td>{phasing_status}</td>
-                        </tr>
-                    """)
-
-                f.write('</table>')
-
-                sample_dir = os.path.join(self.output_dir, sample_id)
-                if os.path.exists(os.path.join(sample_dir, "pharmcat_xai_report.html")):
-                    f.write(
-                        f'<p><a href="{sample_id}/pharmcat_xai_report.html" target="_blank">View detailed report for {sample_id}</a></p>')
-
-                f.write('</div>')
-
-            f.write("""
-                <hr>
-                <footer>
-                    <p><em>This unified report was generated using PharmCAT XAI Explainer to analyze pharmacogenomic predictions across multiple samples.</em></p>
-                </footer>
-            </body>
-            </html>
-            """)
+            similarity = matching_variants / total_variants if total_variants > 0 else 0
+
+            # If very similar to original, assign same phenotype outcome
+            if similarity > 0.7:
+                y.append(1 if gene_info['phenotype'] == ground_truth[gene] else 0)
+            else:
+                # Otherwise flip the outcome
+                y.append(0 if gene_info['phenotype'] == ground_truth[gene] else 1)
+
+        y = np.array(y)
+
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Train a surrogate model
+        model = RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42)
+        model.fit(X_train, y_train)
+
+        # Get SHAP values
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_test)
+
+        # Calculate feature importance
+        if isinstance(shap_values, list):
+            # For multi-class output
+            importance = np.abs(shap_values[1]).mean(axis=0)
+        else:
+            # For single output
+            importance = np.abs(shap_values).mean(axis=0)
+
+        # Map importance to variants
+        feature_importance = {}
+        for i, col in enumerate(gene_columns):
+            rsid = col.split('_', 1)[1]
+            feature_importance[rsid] = float(importance[i])
+
+        # Sort features by importance
+        sorted_importance = dict(sorted(
+            feature_importance.items(),
+            key=lambda x: x[1],
+            reverse=True
+        ))
+
+        # Get variant details
+        variant_details = {}
+        for rsid in feature_importance.keys():
+            variant_row = gene_variants[gene_variants['rsid'] == rsid]
+            if not variant_row.empty:
+                variant_details[rsid] = {
+                    'position': variant_row['position'].iloc[0],
+                    'ref': variant_row['ref'].iloc[0],
+                    'alt': variant_row['alt'].iloc[0],
+                    'genotype': variant_row['genotype'].iloc[0]
+                }
+
+        # Store results
+        results[gene] = {
+            'feature_importance': sorted_importance,
+            'variant_details': variant_details,
+            'pharmcat_phenotype': gene_info['phenotype'],
+            'ground_truth_phenotype': ground_truth[gene],
+            'match_accuracy': 1 if gene_info['phenotype'] == ground_truth[gene] else 0,
+            'diplotype': gene_info['diplotype'],
+            'allele1': gene_info['allele1'],
+            'allele2': gene_info['allele2'],
+            'pharmcat_variants': gene_info['variants']
+        }
+
+    return results
+
+
+def analyze_decision_pathways(results, vcf_df, match_df, phenotype_df):
+    """Analyze the decision pathways from variants to phenotype."""
+
+    for gene, gene_info in results.items():
+        # Get the top variants by importance
+        top_variants = list(gene_info['feature_importance'].keys())[:3]
+
+        # Get the corresponding rows from match and phenotype dataframes
+        gene_matches = match_df[match_df['gene'] == gene]
+        gene_phenotypes = phenotype_df[phenotype_df['gene'] == gene]
+
+        # Extract diplotype and haplotype information
+        diplotypes = []
+        if not gene_matches.empty and 'diplotype_name' in gene_matches.columns:
+            diplotypes = gene_matches['diplotype_name'].dropna().unique().tolist()
+
+        haplotypes = []
+        if not gene_matches.empty:
+            if 'haplotype1_name' in gene_matches.columns:
+                haplotypes.extend(gene_matches['haplotype1_name'].dropna().unique().tolist())
+            if 'haplotype2_name' in gene_matches.columns:
+                haplotypes.extend(gene_matches['haplotype2_name'].dropna().unique().tolist())
+
+        # Extract variant to allele relationships
+        variant_allele_map = {}
+        for variant in top_variants:
+            # Find rows in match_df that reference this variant
+            variant_rows = gene_matches[
+                gene_matches['variant_rsids'].notna() &
+                gene_matches['variant_rsids'].str.contains(variant)
+                ]
+
+            if not variant_rows.empty:
+                alleles = []
+                if 'haplotype1_name' in variant_rows.columns:
+                    alleles.extend(variant_rows['haplotype1_name'].dropna().unique().tolist())
+                if 'haplotype2_name' in variant_rows.columns:
+                    alleles.extend(variant_rows['haplotype2_name'].dropna().unique().tolist())
+
+                variant_allele_map[variant] = list(set(alleles))
+            else:
+                variant_allele_map[variant] = []
+
+        # Add decision pathway information to results
+        results[gene]['decision_pathway'] = {
+            'top_variants': top_variants,
+            'diplotypes': diplotypes,
+            'haplotypes': haplotypes,
+            'variant_to_allele_map': variant_allele_map,
+            'phenotype_function': gene_phenotypes['phenotype'].iloc[
+                0] if not gene_phenotypes.empty and 'phenotype' in gene_phenotypes.columns and not pd.isna(
+                gene_phenotypes['phenotype'].iloc[0]) else "Unknown"
+        }
+
+    return results
+
+
+def explain_decisions(results):
+    """Generate human-readable explanations for PharmCAT's decisions."""
+
+    for gene, gene_info in results.items():
+        explanation = []
+
+        # Start with gene and phenotype
+        explanation.append(f"Analysis for gene {gene}:")
+        explanation.append(f"PharmCAT called phenotype: {gene_info['pharmcat_phenotype']}")
+        explanation.append(f"Ground truth phenotype: {gene_info['ground_truth_phenotype']}")
+        explanation.append(f"Match accuracy: {'Correct' if gene_info['match_accuracy'] == 1 else 'Incorrect'}")
+
+        # Add diplotype information
+        explanation.append(f"Diplotype: {gene_info['diplotype']}")
+        explanation.append(f"Allele 1: {gene_info['allele1']}")
+        explanation.append(f"Allele 2: {gene_info['allele2']}")
+
+        # Add information about most important variants
+        explanation.append("\nMost important variants in decision (ranked by SHAP importance):")
+        for i, (variant, importance) in enumerate(list(gene_info['feature_importance'].items())[:5], 1):
+            variant_details = gene_info['variant_details'].get(variant, {})
+            genotype = variant_details.get('genotype', 'Unknown')
+
+            explanation.append(f"{i}. {variant} (Importance: {importance:.4f}, Genotype: {genotype})")
+
+            # Add details about this variant
+            if variant in gene_info['variant_details']:
+                details = gene_info['variant_details'][variant]
+                explanation.append(f"   Position: {details.get('position', 'Unknown')}")
+                explanation.append(f"   Reference allele: {details.get('ref', 'Unknown')}")
+                explanation.append(f"   Alternate allele: {details.get('alt', 'Unknown')}")
+
+        # Add pathway information if available
+        if 'decision_pathway' in gene_info:
+            pathway = gene_info['decision_pathway']
+
+            explanation.append("\nDecision pathway:")
+            for variant in pathway['top_variants']:
+                alleles = pathway['variant_to_allele_map'].get(variant, [])
+                alleles_str = ", ".join(alleles) if alleles else "No specific alleles"
+                explanation.append(f"Variant {variant} → Contributes to alleles: {alleles_str}")
+
+            explanation.append(f"Alleles → Diplotype: {gene_info['diplotype']}")
+            explanation.append(f"Diplotype → Phenotype: {gene_info['pharmcat_phenotype']}")
+
+        # Add explanation to the results
+        results[gene]['explanation'] = "\n".join(explanation)
+
+    return results
+
+
+def main():
+    # Target genes
+    target_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "UGT1A1"]
+
+    print("Step 1: Converting VCF to DataFrame...")
+    vcf_df = vcf_to_dataframe('HG00276_freebayes.preprocessed.vcf', target_genes)
+
+    print("Step 2: Extracting pharmcat data...")
+    match_df = pd.read_csv('HG00276_freebayes.preprocessed.match.csv')
+    phenotype_df = pd.read_csv('HG00276_freebayes.preprocessed.phenotype.csv')
+    pharmcat_data = extract_pharmcat_data(
+        'HG00276_freebayes.preprocessed.match.csv',
+        'HG00276_freebayes.preprocessed.phenotype.csv',
+        target_genes
+    )
+
+    print("Step 3: Getting ground truth phenotypes...")
+    ground_truth = get_ground_truth('groundtruth_phenotype_filtered.csv', target_genes)
+
+    print("Step 4: Generating synthetic samples...")
+    synthetic_samples = generate_synthetic_samples(vcf_df, n_samples=100)
+
+    print("Step 5: Running SHAP analysis...")
+    results = run_shap_analysis(synthetic_samples, pharmcat_data, ground_truth, vcf_df)
+
+    print("Step 6: Analyzing decision pathways...")
+    results = analyze_decision_pathways(results, vcf_df, match_df, phenotype_df)
+
+    print("Step 7: Generating explanations...")
+    results = explain_decisions(results)
+
+    print("Step 8: Saving results...")
+    with open('pharmcat_explanation.json', 'w') as f:
+        json.dump(results, f, indent=4)
+
+    print("Analysis complete! Results saved to pharmcat_explanation.json")
 
 
 if __name__ == "__main__":
-    # Define key pharmacogenes to focus on
-    focus_genes = ["CYP2B6", "CYP2C19", "CYP2C9", "CYP3A4", "CYP3A5", "CYP4F2", "DPYD", "SLCO1B1", "TPMT", "UGT1A1"]
-
-    # Create the explainer with no specific file paths
-    explainer = PharmcatExplainer(output_dir='xai_results')
-    explainer.focus_genes = focus_genes
-    explainer.run_all('pharmcat_processed')
+    main()
