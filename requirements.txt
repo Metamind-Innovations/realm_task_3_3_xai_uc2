@@ -1,8 +1,7 @@
+pandas
 matplotlib
-numpy
-pandas==2.2.3
-scikit-learn
 seaborn
-kfp==2.12.0
-kubernetes
-scipy
+numpy
+tqdm
+shap
+scikit-learn
