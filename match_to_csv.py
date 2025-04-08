@@ -1,4 +1,5 @@
 import csv
+import glob
 import json
 import os
 import sys
@@ -92,13 +93,55 @@ def match_json_to_csv(input_file, output_file=None):
     return output_file
 
 
-if __name__ == '__main__':
+def process_pharmcat_folders(base_dir='pharmcat_processed'):
+    if not os.path.exists(base_dir):
+        print(f"Error: Directory {base_dir} does not exist.")
+        return []
+
+    processed_files = []
+
+    # Get all sample folders
+    sample_folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
+
+    for sample_folder in sample_folders:
+        sample_path = os.path.join(base_dir, sample_folder)
+
+        # Find all match.json files in the sample folder
+        match_files = glob.glob(os.path.join(sample_path, "*.match.json"))
+
+        for match_file in match_files:
+            csv_path = os.path.splitext(match_file)[0] + '.csv'
+
+            # Convert match.json to CSV
+            output_csv = match_json_to_csv(match_file, csv_path)
+            processed_files.append(output_csv)
+            print(f"Converted {match_file} to {output_csv}")
+
+    return processed_files
+
+
+def main():
     if len(sys.argv) < 2:
-        print("Usage: python match_json_to_csv.py input_file.json [output_file.csv]")
-        sys.exit(1)
+        # Process all pharmcat folders by default
+        processed_files = process_pharmcat_folders()
+        if processed_files:
+            print(f"Processed {len(processed_files)} files")
+        else:
+            print("Usage: python match_json_to_csv.py input_file.json [output_file.csv]")
+            print("Or run without arguments to process all files under pharmcat_processed/")
+    else:
+        input_file = sys.argv[1]
 
-    input_file = sys.argv[1]
-    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+        if os.path.isdir(input_file):
+            # Process directory
+            processed_files = process_pharmcat_folders(input_file)
+            print(f"Processed {len(processed_files)} files in {input_file}")
+        else:
+            # Process single file
+            output_file = sys.argv[2] if len(sys.argv) > 2 else None
+            result_file = match_json_to_csv(input_file, output_file)
+            print(f"Converted {input_file} to {result_file}")
 
-    result_file = match_json_to_csv(input_file, output_file)
-    print(f"Converted {input_file} to {result_file}")
+
+if __name__ == '__main__':
+    main()

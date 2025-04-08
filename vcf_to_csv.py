@@ -100,15 +100,47 @@ def parse_vcf_to_csv(vcf_file, output_csv=None):
     return output_csv
 
 
+def process_pharmcat_folders(base_dir='pharmcat_processed'):
+    if not os.path.exists(base_dir):
+        print(f"Error: Directory {base_dir} does not exist.")
+        return []
+
+    processed_files = []
+
+    # Get all sample folders
+    sample_folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
+
+    for sample_folder in sample_folders:
+        sample_path = os.path.join(base_dir, sample_folder)
+
+        # Find preprocessed VCF files in the sample folder
+        vcf_files = [f for f in os.listdir(sample_path) if f.endswith('preprocessed.vcf')]
+
+        for vcf_file in vcf_files:
+            vcf_path = os.path.join(sample_path, vcf_file)
+            csv_path = os.path.splitext(vcf_path)[0] + '.csv'
+
+            # Convert VCF to CSV
+            output_csv = parse_vcf_to_csv(vcf_path, csv_path)
+            processed_files.append(output_csv)
+            print(f"Converted {vcf_path} to {output_csv}")
+
+    return processed_files
+
+
 def main():
     if len(sys.argv) > 1:
         input_path = sys.argv[1]
 
         if os.path.isdir(input_path):
-            vcf_files = [os.path.join(input_path, f) for f in os.listdir(input_path) if f.endswith('.vcf')]
-            for vcf_file in vcf_files:
-                output_csv = parse_vcf_to_csv(vcf_file)
-                print(f"Converted {vcf_file} to {output_csv}")
+            if input_path == 'pharmcat_processed' or os.path.basename(input_path) == 'pharmcat_processed':
+                processed_files = process_pharmcat_folders(input_path)
+                print(f"Processed {len(processed_files)} files under {input_path}")
+            else:
+                vcf_files = [os.path.join(input_path, f) for f in os.listdir(input_path) if f.endswith('.vcf')]
+                for vcf_file in vcf_files:
+                    output_csv = parse_vcf_to_csv(vcf_file)
+                    print(f"Converted {vcf_file} to {output_csv}")
         else:
             for vcf_file in sys.argv[1:]:
                 if os.path.isfile(vcf_file) and vcf_file.endswith('.vcf'):
@@ -117,9 +149,15 @@ def main():
                 else:
                     print(f"Skipping {vcf_file}: not a VCF file")
     else:
-        print("Please provide VCF files or a directory as arguments.")
-        print("Usage: python vcf_to_csv.py file1.vcf file2.vcf ...")
-        print("Or: python vcf_to_csv.py directory_with_vcfs")
+        # By default, process the pharmcat_processed directory
+        processed_files = process_pharmcat_folders()
+        if processed_files:
+            print(f"Processed {len(processed_files)} files under pharmcat_processed")
+        else:
+            print("Please provide VCF files or a directory as arguments.")
+            print("Usage: python vcf_to_csv.py file1.vcf file2.vcf ...")
+            print("Or: python vcf_to_csv.py directory_with_vcfs")
+            print("Or run without arguments to process all files under pharmcat_processed/")
 
 
 if __name__ == "__main__":
