@@ -2,11 +2,7 @@ import glob
 import json
 import os
 
-import numpy as np
 import pandas as pd
-import shap
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 
 
 class PharmcatExplainer:
@@ -16,6 +12,24 @@ class PharmcatExplainer:
         self.focus_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "UGT1A1"]
         self.samples = self.get_samples()
         self.ground_truth = self.load_ground_truth('Groundtruth/groundtruth_phenotype_filtered.csv')
+
+        # Define mappings from abbreviated to full phenotype names
+        self.phenotype_mappings = {
+            'Normal Metabolizer': 'NM',
+            'Likely Normal Metabolizer': 'LNM',
+            'Intermediate Metabolizer': 'IM',
+            'Likely Intermediate Metabolizer': 'LIM',
+            'Poor Metabolizer': 'PM',
+            'Likely Poor Metabolizer': 'LPM',
+            'Ultra Rapid Metabolizer': 'UM',
+            'Ultrarapid Metabolizer': 'UM', # Needed for Pharmcat
+            'Likely Ultra Rapid Metabolizer': 'LUM',
+            'Rapid Metabolizer': 'RM',
+            'Likely Rapid Metabolizer': 'LRM',
+            'Indeterminate': 'INDETERMINATE',
+            'No Result': 'INDETERMINATE',
+            'n/a': 'INDETERMINATE',
+        }
 
         os.makedirs(output_dir, exist_ok=True)
 
@@ -102,54 +116,6 @@ class PharmcatExplainer:
             print(f"Error reading phenotype CSV for {sample}: {e}")
             return None
 
-    def generate_synthetic_samples(self, vcf_df, n_samples=100):
-        if vcf_df is None or vcf_df.empty:
-            return pd.DataFrame()
-
-        features = {}
-        for _, row in vcf_df.iterrows():
-            if 'Gene' in row and 'ID' in row and pd.notnull(row['Gene']) and row['Gene'] in self.focus_genes:
-                key = f"{row['Gene']}_{row['ID']}"
-
-                # Try to extract genotype value from common formats
-                genotype = None
-                for col in row.index:
-                    if '_GT' in col or col == 'GT':
-                        genotype = row[col]
-                        break
-
-                if genotype is None:
-                    continue
-
-                # Convert genotype to numeric
-                if genotype == '0/0':
-                    features[key] = 0  # Reference homozygous
-                elif genotype in ['0/1', '1/0', '0/2', '2/0']:
-                    features[key] = 1  # Heterozygous
-                elif genotype in ['1/1', '2/2', '1/2', '2/1']:
-                    features[key] = 2  # Alternate homozygous or compound heterozygous
-                else:
-                    features[key] = np.nan
-
-        # Create synthetic samples
-        all_samples = []
-        all_samples.append(features.copy())  # Include original sample
-
-        for _ in range(n_samples):
-            sample = features.copy()
-
-            # Randomly perturb some genotypes
-            for key in sample:
-                if np.random.random() < 0.3:  # 30% chance of mutation
-                    current = sample[key]
-                    if not np.isnan(current):
-                        options = [g for g in [0, 1, 2] if g != current]
-                        sample[key] = np.random.choice(options)
-
-            all_samples.append(sample)
-
-        return pd.DataFrame(all_samples)
-
     def extract_pharmcat_data(self, sample, match_df, phenotype_df):
         if match_df is None or phenotype_df is None:
             return {}
@@ -166,7 +132,7 @@ class PharmcatExplainer:
             phenotype = "Unknown"
             for col in ['phenotype', 'activity_score']:
                 if col in gene_phenotypes.columns and not pd.isna(gene_phenotypes[col].iloc[0]):
-                    phenotype = gene_phenotypes[col].iloc[0]
+                    phenotype = str(gene_phenotypes[col].iloc[0])
                     break
 
             variants = []
@@ -196,7 +162,7 @@ class PharmcatExplainer:
                         break
 
             gene_data[gene] = {
-                'phenotype': str(phenotype),
+                'phenotype': phenotype,
                 'diplotype': diplotype,
                 'allele1': allele1,
                 'allele2': allele2,
@@ -226,139 +192,117 @@ class PharmcatExplainer:
         for gene in self.focus_genes:
             if gene not in sample_ground_truth:
                 sample_ground_truth[gene] = "Unknown"
+            else:
+                # Convert abbreviated phenotypes to full names
+                abbr = sample_ground_truth[gene]
+                if abbr in self.phenotype_mappings:
+                    sample_ground_truth[gene] = self.phenotype_mappings[abbr]
 
         return sample_ground_truth
 
-    def run_shap_analysis(self, sample, vcf_df, pharmcat_data, ground_truth):
+    def direct_variant_analysis(self, sample, vcf_df, pharmcat_data, ground_truth):
         if vcf_df is None or not pharmcat_data:
             return {}
 
         results = {}
-        synthetic_samples = self.generate_synthetic_samples(vcf_df)
-
-        if synthetic_samples.empty:
-            print(f"No synthetic samples could be generated for {sample}")
-            return {}
 
         for gene, gene_info in pharmcat_data.items():
             print(f"Analyzing gene: {gene}")
 
+            # Filter VCF data for this gene
             gene_variants = None
             if 'Gene' in vcf_df.columns:
                 gene_variants = vcf_df[vcf_df['Gene'] == gene]
 
-            # Get columns for this gene
-            gene_columns = [col for col in synthetic_samples.columns if col.startswith(f"{gene}_")]
-
-            if not gene_columns:
-                print(f"  No features found for {gene}, skipping...")
+            if gene_variants is None or gene_variants.empty:
+                print(f"  No variants found for {gene}, skipping...")
                 continue
 
-            # Prepare X data
-            X = synthetic_samples[gene_columns].copy()
-            X.fillna(0, inplace=True)  # Replace NaN with 0
+            # Extract variant information
+            variant_importance = {}
+            variant_details = {}
 
-            # For each sample, simulate phenotype match or mismatch
-            y = []
-            original_sample = synthetic_samples.iloc[0]
+            # For each variant in the VCF, assess its importance
+            for _, row in gene_variants.iterrows():
+                if 'ID' not in row or pd.isna(row['ID']):
+                    continue
 
-            for _, sample_row in synthetic_samples.iterrows():
-                # Count how many variants match the original sample
-                matching_variants = sum(
-                    1 for col in gene_columns
-                    if sample_row[col] == original_sample[col] and not np.isnan(sample_row[col])
-                )
-                total_variants = sum(
-                    1 for col in gene_columns
-                    if not np.isnan(original_sample[col])
-                )
+                rsid = row['ID']
 
-                similarity = matching_variants / total_variants if total_variants > 0 else 0
+                # Get genotype
+                genotype = "Unknown"
+                for col in row.index:
+                    if '_GT' in col or col == 'GT':
+                        genotype = row[col]
+                        break
 
-                # If very similar to original, assign same phenotype outcome
-                if similarity > 0.7:
-                    y.append(1 if gene_info['phenotype'] == ground_truth.get(gene, "Unknown") else 0)
-                else:
-                    # Otherwise flip the outcome
-                    y.append(0 if gene_info['phenotype'] == ground_truth.get(gene, "Unknown") else 1)
+                # Check if this variant is in the pharmcat results
+                is_used = rsid in gene_info['variants']
 
-            y = np.array(y)
+                # Assign an importance score based on:
+                # 1. Whether the variant is used by PharmCAT
+                # 2. Whether it's homozygous or heterozygous (more impact if homozygous)
+                importance = 0.0
 
-            # Split data
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                if is_used:
+                    # Base importance for being used
+                    importance += 0.5
 
-            # Train a surrogate model
-            model = RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42)
-            try:
-                model.fit(X_train, y_train)
-            except Exception as e:
-                print(f"  Error training model for {gene}: {e}")
-                continue
+                    # Additional importance based on genotype
+                    if genotype in ['1/1', '2/2']:  # Homozygous alternate
+                        importance += 0.3
+                    elif genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
+                        importance += 0.15
 
-            # Get SHAP values
-            try:
-                explainer = shap.TreeExplainer(model)
-                shap_values = explainer.shap_values(X_test)
-            except Exception as e:
-                print(f"  Error computing SHAP values for {gene}: {e}")
-                continue
+                variant_importance[rsid] = importance
 
-            # Calculate feature importance
-            if isinstance(shap_values, list):
-                # For multi-class output
-                importance = np.abs(shap_values[1]).mean(axis=0)
-            else:
-                # For single output
-                importance = np.abs(shap_values).mean(axis=0)
+                # Store variant details
+                variant_details[rsid] = {
+                    'position': str(row['POS']) if 'POS' in row else "Unknown",
+                    'ref': str(row['REF']) if 'REF' in row else "Unknown",
+                    'alt': str(row['ALT']) if 'ALT' in row else "Unknown",
+                    'genotype': str(genotype),
+                    'used_by_pharmcat': is_used
+                }
 
-            # Map importance to variants
-            feature_importance = {}
-            for i, col in enumerate(gene_columns):
-                rsid = col.split('_', 1)[1]
+            # Add extra importance to variants explicitly mentioned in the diplotype
+            diplotype = gene_info['diplotype']
+            diplotype_parts = str(diplotype).split('/')
 
-                # Fix the error by ensuring we handle both scalar and array cases
-                if isinstance(importance[i], np.ndarray):
-                    # If it's an array, take the mean
-                    imp_value = float(np.mean(importance[i]))
-                else:
-                    # If it's a scalar, convert directly
-                    imp_value = float(importance[i])
+            for variant_id, details in variant_details.items():
+                for part in diplotype_parts:
+                    if variant_id in part:
+                        variant_importance[variant_id] += 0.5
+                        details['in_diplotype'] = True
 
-                feature_importance[rsid] = imp_value
+            # Normalize importance values
+            if variant_importance:
+                max_importance = max(variant_importance.values())
+                if max_importance > 0:
+                    for variant_id in variant_importance:
+                        variant_importance[variant_id] /= max_importance
 
-            # Sort features by importance
+            # Sort by importance
             sorted_importance = dict(sorted(
-                feature_importance.items(),
+                variant_importance.items(),
                 key=lambda x: x[1],
                 reverse=True
             ))
 
-            # Get variant details
-            variant_details = {}
-            for rsid in feature_importance.keys():
-                if gene_variants is not None and not gene_variants.empty:
-                    variant_row = gene_variants[gene_variants['ID'] == rsid]
-                    if not variant_row.empty:
-                        genotype = "Unknown"
-                        for col in variant_row.columns:
-                            if '_GT' in col or col == 'GT':
-                                genotype = variant_row[col].iloc[0]
-                                break
+            # Check if the phenotypes match, considering possible mappings
+            pharmcat_phenotype = gene_info['phenotype']
+            ground_truth_phenotype = ground_truth.get(gene, "Unknown")
 
-                        variant_details[rsid] = {
-                            'position': str(variant_row['POS'].iloc[0]) if 'POS' in variant_row.columns else "Unknown",
-                            'ref': str(variant_row['REF'].iloc[0]) if 'REF' in variant_row.columns else "Unknown",
-                            'alt': str(variant_row['ALT'].iloc[0]) if 'ALT' in variant_row.columns else "Unknown",
-                            'genotype': str(genotype)
-                        }
+            # Direct match
+            is_match = (pharmcat_phenotype == ground_truth_phenotype)
 
             # Store results
             results[gene] = {
                 'feature_importance': sorted_importance,
                 'variant_details': variant_details,
-                'pharmcat_phenotype': gene_info['phenotype'],
-                'ground_truth_phenotype': ground_truth.get(gene, "Unknown"),
-                'match_accuracy': 1 if gene_info['phenotype'] == ground_truth.get(gene, "Unknown") else 0,
+                'pharmcat_phenotype': pharmcat_phenotype,
+                'ground_truth_phenotype': ground_truth_phenotype,
+                'match_accuracy': 1 if is_match else 0,
                 'diplotype': gene_info['diplotype'],
                 'allele1': gene_info['allele1'],
                 'allele2': gene_info['allele2'],
@@ -442,12 +386,22 @@ class PharmcatExplainer:
             explanation.append(f"Allele 1: {gene_info['allele1']}")
             explanation.append(f"Allele 2: {gene_info['allele2']}")
 
-            explanation.append("\nMost important variants in decision (ranked by SHAP importance):")
+            explanation.append("\nMost important variants in decision (ranked by importance):")
             for i, (variant, importance) in enumerate(list(gene_info['feature_importance'].items())[:5], 1):
                 variant_details = gene_info['variant_details'].get(variant, {})
                 genotype = variant_details.get('genotype', 'Unknown')
+                used_by_pharmcat = variant_details.get('used_by_pharmcat', False)
+                in_diplotype = variant_details.get('in_diplotype', False)
 
-                explanation.append(f"{i}. {variant} (Importance: {importance:.4f}, Genotype: {genotype})")
+                status = []
+                if used_by_pharmcat:
+                    status.append("Used by PharmCAT")
+                if in_diplotype:
+                    status.append("In diplotype")
+                status_str = ", ".join(status) if status else "Not directly used"
+
+                explanation.append(
+                    f"{i}. {variant} (Importance: {importance:.2f}, Genotype: {genotype}, Status: {status_str})")
 
                 if variant in gene_info['variant_details']:
                     details = gene_info['variant_details'][variant]
@@ -501,7 +455,7 @@ class PharmcatExplainer:
 
             pharmcat_data = self.extract_pharmcat_data(sample, match_df, phenotype_df)
 
-            results = self.run_shap_analysis(sample, vcf_df, pharmcat_data, sample_ground_truth)
+            results = self.direct_variant_analysis(sample, vcf_df, pharmcat_data, sample_ground_truth)
 
             results = self.analyze_decision_pathways(sample, results, vcf_df, match_df, phenotype_df)
 
