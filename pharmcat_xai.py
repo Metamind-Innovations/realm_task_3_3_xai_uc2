@@ -1,485 +1,774 @@
 import glob
 import json
 import os
+from collections import defaultdict
 
 import pandas as pd
 
 
 class PharmcatExplainer:
-    def __init__(self, base_dir='pharmcat_processed', output_dir='xai_results'):
-        self.base_dir = base_dir
+    def __init__(self, vcf_csv_dir='Preprocessed', phenotypes_file='result/phenotypes.csv', output_dir='xai_results'):
+        self.vcf_csv_dir = vcf_csv_dir
+        self.phenotypes_file = phenotypes_file
         self.output_dir = output_dir
-        self.focus_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "UGT1A1"]
-        self.samples = self.get_samples()
-        self.ground_truth = self.load_ground_truth('Groundtruth/groundtruth_phenotype_filtered.csv')
+        self.focus_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
 
-        # Define mappings from abbreviated to full phenotype names
-        self.phenotype_mappings = {
-            'Normal Metabolizer': 'NM',
-            'Likely Normal Metabolizer': 'LNM',
-            'Intermediate Metabolizer': 'IM',
-            'Likely Intermediate Metabolizer': 'LIM',
-            'Poor Metabolizer': 'PM',
-            'Likely Poor Metabolizer': 'LPM',
-            'Ultra Rapid Metabolizer': 'UM',
-            'Ultrarapid Metabolizer': 'UM', # Needed for Pharmcat
-            'Likely Ultra Rapid Metabolizer': 'LUM',
-            'Rapid Metabolizer': 'RM',
-            'Likely Rapid Metabolizer': 'LRM',
-            'Indeterminate': 'INDETERMINATE',
-            'No Result': 'INDETERMINATE',
-            'n/a': 'INDETERMINATE',
+        # Map of phenotype codes to descriptions
+        self.phenotype_descriptions = {
+            # Metabolizer phenotypes
+            'NM': 'Normal Metabolizer',
+            'LNM': 'Likely Normal Metabolizer',
+            'IM': 'Intermediate Metabolizer',
+            'LIM': 'Likely Intermediate Metabolizer',
+            'PM': 'Poor Metabolizer',
+            'LPM': 'Likely Poor Metabolizer',
+            'UM': 'Ultra Rapid Metabolizer',
+            'LUM': 'Likely Ultra Rapid Metabolizer',
+            'RM': 'Rapid Metabolizer',
+            'LRM': 'Likely Rapid Metabolizer',
+
+            # Function phenotypes
+            'NF': 'Normal Function',
+            'DF': 'Decreased Function',
+            'IF': 'Increased Function',
+            'PF': 'Poor Function',
+            'PDF': 'Possible Decrease Function',
+
+            # Special cases
+            'INDETERMINATE': 'Indeterminate'
         }
+
+        # Define the phenotype categories (for importance analysis)
+        self.phenotype_categories = {
+            # Decreased metabolism/function
+            'decreased': ['PM', 'LPM', 'IM', 'LIM', 'DF', 'PF', 'PDF'],
+            # Normal metabolism/function
+            'normal': ['NM', 'LNM', 'NF'],
+            # Increased metabolism/function
+            'increased': ['UM', 'LUM', 'RM', 'LRM', 'IF'],
+            # Special case
+            'indeterminate': ['INDETERMINATE']
+        }
+
+        # Variant-phenotype association data
+        self.variant_phenotype_effects = self._load_variant_phenotype_effects()
 
         os.makedirs(output_dir, exist_ok=True)
 
-    def get_samples(self):
-        samples = []
-        if os.path.exists(self.base_dir):
-            for sample_dir in os.listdir(self.base_dir):
-                sample_path = os.path.join(self.base_dir, sample_dir)
-                if os.path.isdir(sample_path):
-                    samples.append(sample_dir)
-        return samples
+        # Load phenotypes data
+        self.phenotypes = pd.read_csv(phenotypes_file)
 
-    def load_ground_truth(self, ground_truth_file):
-        try:
-            gt_df = pd.read_csv(ground_truth_file)
-            ground_truth = {}
-            for _, row in gt_df.iterrows():
-                sample = row['Sample']
-                ground_truth[sample] = {}
-                for gene in self.focus_genes:
-                    if gene in row and not pd.isna(row[gene]):
-                        ground_truth[sample][gene] = row[gene]
-            return ground_truth
-        except Exception as e:
-            print(f"Error loading ground truth: {e}")
-            return {}
+        # Cache for storing variant distribution across phenotypes
+        self.variant_phenotype_distribution = {}
 
-    def load_vcf_csv(self, sample):
-        vcf_csv_pattern = os.path.join(self.base_dir, sample, f"{sample}_*.preprocessed.csv")
-        vcf_csv_files = glob.glob(vcf_csv_pattern)
+        # Load all sample data to build variant-phenotype associations
+        self.all_sample_data = self._preload_all_samples()
 
-        if not vcf_csv_files:
-            vcf_csv_pattern = os.path.join(self.base_dir, sample, f"*.csv")
-            vcf_csv_files = glob.glob(vcf_csv_pattern)
-            vcf_csv_files = [f for f in vcf_csv_files if not (f.endswith('.match.csv') or f.endswith('.phenotype.csv'))]
+        # Sample ID to file mapping
+        self.sample_to_csv = self._map_samples_to_files()
 
-        if not vcf_csv_files:
-            print(f"No CSV files found for sample {sample}")
-            return None
+    def _load_variant_phenotype_effects(self):
+        """Load known associations between variants and phenotypes"""
+        # This would ideally come from a database, but for now we'll use a static mapping
+        return {
+            # CYP2B6
+            'rs3745274': {
+                'gene': 'CYP2B6',
+                'allele': 'CYP2B6*6',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',  # Poor metabolizer when homozygous
+                    'heterozygous': 'IM'  # Intermediate metabolizer when heterozygous
+                },
+                'clinical_significance': 'Affects metabolism of efavirenz, nevirapine, and other drugs'
+            },
+            'rs2279343': {
+                'gene': 'CYP2B6',
+                'allele': 'CYP2B6*4',
+                'effect': 'Increased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'RM',  # Rapid metabolizer when homozygous
+                    'heterozygous': 'IM'  # Intermediate effect when heterozygous
+                }
+            },
 
-        vcf_csv = vcf_csv_files[0]
-        try:
-            df = pd.read_csv(vcf_csv)
-            return df
-        except Exception as e:
-            print(f"Error reading VCF CSV for {sample}: {e}")
-            return None
+            # CYP2C9
+            'rs1799853': {
+                'gene': 'CYP2C9',
+                'allele': 'CYP2C9*2',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Affects metabolism of warfarin, phenytoin, NSAIDs'
+            },
+            'rs1057910': {
+                'gene': 'CYP2C9',
+                'allele': 'CYP2C9*3',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Significant impact on warfarin dosing'
+            },
 
-    def load_match_csv(self, sample):
-        match_csv = os.path.join(self.base_dir, sample, f"{sample}_*.match.csv")
-        match_files = glob.glob(match_csv)
+            # CYP2C19
+            'rs4244285': {
+                'gene': 'CYP2C19',
+                'allele': 'CYP2C19*2',
+                'effect': 'Loss of function',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Affects metabolism of clopidogrel, PPIs, antidepressants'
+            },
+            'rs4986893': {
+                'gene': 'CYP2C19',
+                'allele': 'CYP2C19*3',
+                'effect': 'Loss of function',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                }
+            },
+            'rs12248560': {
+                'gene': 'CYP2C19',
+                'allele': 'CYP2C19*17',
+                'effect': 'Increased expression',
+                'phenotype_association': {
+                    'homozygous': 'UM',
+                    'heterozygous': 'RM'
+                },
+                'clinical_significance': 'Enhanced conversion of clopidogrel to active metabolite'
+            },
 
-        if not match_files:
-            match_csv = os.path.join(self.base_dir, sample, f"*.match.csv")
-            match_files = glob.glob(match_csv)
+            # CYP3A5
+            'rs776746': {
+                'gene': 'CYP3A5',
+                'allele': 'CYP3A5*3',
+                'effect': 'Non-functional enzyme',
+                'phenotype_association': {
+                    'homozygous': 'PM',  # Non-expressor
+                    'heterozygous': 'IM'  # Intermediate expressor
+                },
+                'clinical_significance': 'Affects metabolism of tacrolimus and other immunosuppressants'
+            },
 
-        if not match_files:
-            print(f"No match CSV found for sample {sample}")
-            return None
+            # SLCO1B1
+            'rs4149056': {
+                'gene': 'SLCO1B1',
+                'allele': 'SLCO1B1*5',
+                'effect': 'Decreased transporter function',
+                'phenotype_association': {
+                    'homozygous': 'PF',
+                    'heterozygous': 'DF'
+                },
+                'clinical_significance': 'Increased risk of statin-induced myopathy'
+            },
+            'rs2306283': {
+                'gene': 'SLCO1B1',
+                'allele': 'SLCO1B1*1B',
+                'effect': 'Increased transporter function',
+                'phenotype_association': {
+                    'homozygous': 'IF',
+                    'heterozygous': 'NF'
+                }
+            },
 
-        try:
-            df = pd.read_csv(match_files[0])
-            return df
-        except Exception as e:
-            print(f"Error reading match CSV for {sample}: {e}")
-            return None
+            # TPMT
+            'rs1800462': {
+                'gene': 'TPMT',
+                'allele': 'TPMT*2',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Increased risk of thiopurine toxicity'
+            },
+            'rs1800460': {
+                'gene': 'TPMT',
+                'allele': 'TPMT*3B',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                }
+            },
+            'rs1142345': {
+                'gene': 'TPMT',
+                'allele': 'TPMT*3C',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Most common decreased function allele'
+            },
 
-    def load_phenotype_csv(self, sample):
-        phenotype_csv = os.path.join(self.base_dir, sample, f"{sample}_*.phenotype.csv")
-        phenotype_files = glob.glob(phenotype_csv)
-
-        if not phenotype_files:
-            phenotype_csv = os.path.join(self.base_dir, sample, f"*.phenotype.csv")
-            phenotype_files = glob.glob(phenotype_csv)
-
-        if not phenotype_files:
-            print(f"No phenotype CSV found for sample {sample}")
-            return None
-
-        try:
-            df = pd.read_csv(phenotype_files[0])
-            return df
-        except Exception as e:
-            print(f"Error reading phenotype CSV for {sample}: {e}")
-            return None
-
-    def extract_pharmcat_data(self, sample, match_df, phenotype_df):
-        if match_df is None or phenotype_df is None:
-            return {}
-
-        gene_data = {}
-
-        for gene in self.focus_genes:
-            gene_phenotypes = phenotype_df[phenotype_df['gene'] == gene]
-            gene_matches = match_df[match_df['gene'] == gene]
-
-            if gene_phenotypes.empty:
-                continue
-
-            phenotype = "Unknown"
-            for col in ['phenotype', 'activity_score']:
-                if col in gene_phenotypes.columns and not pd.isna(gene_phenotypes[col].iloc[0]):
-                    phenotype = str(gene_phenotypes[col].iloc[0])
-                    break
-
-            variants = []
-            if not gene_matches.empty and 'variant_rsids' in gene_matches.columns:
-                for _, row in gene_matches.iterrows():
-                    if pd.notna(row['variant_rsids']) and row['variant_rsids']:
-                        variants.extend(row['variant_rsids'].split(';'))
-
-            diplotype = "Unknown"
-            allele1 = "Unknown"
-            allele2 = "Unknown"
-
-            if not gene_phenotypes.empty:
-                for col in ['diplotype_label', 'diplotype_name']:
-                    if col in gene_phenotypes.columns and not pd.isna(gene_phenotypes[col].iloc[0]):
-                        diplotype = gene_phenotypes[col].iloc[0]
-                        break
-
-                for col in ['allele1_name', 'haplotype1_name']:
-                    if col in gene_phenotypes.columns and not pd.isna(gene_phenotypes[col].iloc[0]):
-                        allele1 = gene_phenotypes[col].iloc[0]
-                        break
-
-                for col in ['allele2_name', 'haplotype2_name']:
-                    if col in gene_phenotypes.columns and not pd.isna(gene_phenotypes[col].iloc[0]):
-                        allele2 = gene_phenotypes[col].iloc[0]
-                        break
-
-            gene_data[gene] = {
-                'phenotype': phenotype,
-                'diplotype': diplotype,
-                'allele1': allele1,
-                'allele2': allele2,
-                'variants': list(set(variants))
+            # DPYD
+            'rs3918290': {
+                'gene': 'DPYD',
+                'allele': 'DPYD*2A',
+                'effect': 'Complete loss of function, splice site mutation',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'High risk of severe fluoropyrimidine toxicity'
+            },
+            'rs55886062': {
+                'gene': 'DPYD',
+                'allele': 'DPYD*13',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Increased risk of fluoropyrimidine toxicity'
+            },
+            'rs67376798': {
+                'gene': 'DPYD',
+                'allele': 'DPYD c.2846A>T',
+                'effect': 'Decreased enzyme activity',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                },
+                'clinical_significance': 'Moderate risk of fluoropyrimidine toxicity'
+            },
+            'rs75017182': {
+                'gene': 'DPYD',
+                'allele': 'DPYD c.1679T>G',
+                'effect': 'Decreased enzyme function',
+                'phenotype_association': {
+                    'homozygous': 'PM',
+                    'heterozygous': 'IM'
+                }
             }
+        }
 
-        return gene_data
+    def _map_samples_to_files(self):
+        mapping = {}
+        vcf_csv_files = glob.glob(os.path.join(self.vcf_csv_dir, '*.csv'))
 
-    def get_ground_truth_for_sample(self, sample):
-        sample_ground_truth = {}
-        sample_id = sample.split('_')[0]
+        for csv_file in vcf_csv_files:
+            filename = os.path.basename(csv_file)
+            sample_id = filename.split('_')[0]
+            mapping[sample_id] = csv_file
 
-        # Try exact match
-        if sample in self.ground_truth:
-            sample_ground_truth = self.ground_truth[sample]
-        # Try partial match
-        elif sample_id in self.ground_truth:
-            sample_ground_truth = self.ground_truth[sample_id]
-        else:
-            # Try to find a match with sample ID
-            for gt_sample in self.ground_truth:
-                if gt_sample.startswith(sample_id):
-                    sample_ground_truth = self.ground_truth[gt_sample]
+        return mapping
+
+    def _preload_all_samples(self):
+        """Load all sample data to analyze variant-phenotype correlations"""
+        sample_data = {}
+
+        # For each sample in the phenotypes file
+        for _, row in self.phenotypes.iterrows():
+            sample_id = row['Sample ID']
+
+            # Find the corresponding VCF file
+            csv_path = None
+            for file_path in glob.glob(os.path.join(self.vcf_csv_dir, '*.csv')):
+                if sample_id in os.path.basename(file_path):
+                    csv_path = file_path
                     break
 
-        # Set defaults for missing genes
-        for gene in self.focus_genes:
-            if gene not in sample_ground_truth:
-                sample_ground_truth[gene] = "Unknown"
-            else:
-                # Convert abbreviated phenotypes to full names
-                abbr = sample_ground_truth[gene]
-                if abbr in self.phenotype_mappings:
-                    sample_ground_truth[gene] = self.phenotype_mappings[abbr]
-
-        return sample_ground_truth
-
-    def direct_variant_analysis(self, sample, vcf_df, pharmcat_data, ground_truth):
-        if vcf_df is None or not pharmcat_data:
-            return {}
-
-        results = {}
-
-        for gene, gene_info in pharmcat_data.items():
-            print(f"Analyzing gene: {gene}")
-
-            # Filter VCF data for this gene
-            gene_variants = None
-            if 'Gene' in vcf_df.columns:
-                gene_variants = vcf_df[vcf_df['Gene'] == gene]
-
-            if gene_variants is None or gene_variants.empty:
-                print(f"  No variants found for {gene}, skipping...")
+            if not csv_path:
                 continue
 
-            # Extract variant information
-            variant_importance = {}
-            variant_details = {}
+            try:
+                # Load the VCF data
+                vcf_df = pd.read_csv(csv_path)
 
-            # For each variant in the VCF, assess its importance
-            for _, row in gene_variants.iterrows():
-                if 'ID' not in row or pd.isna(row['ID']):
-                    continue
+                # Store phenotypes and variant data
+                phenotypes = {}
+                for gene in self.focus_genes:
+                    if gene in row:
+                        phenotypes[gene] = row[gene]
 
-                rsid = row['ID']
+                variants = {}
+                for gene in self.focus_genes:
+                    gene_variants = vcf_df[vcf_df['Gene'] == gene] if 'Gene' in vcf_df.columns else pd.DataFrame()
 
-                # Get genotype
-                genotype = "Unknown"
-                for col in row.index:
-                    if '_GT' in col or col == 'GT':
-                        genotype = row[col]
-                        break
+                    if not gene_variants.empty:
+                        variants[gene] = []
+                        for _, variant_row in gene_variants.iterrows():
+                            if 'ID' in variant_row and not pd.isna(variant_row['ID']):
+                                # Get genotype
+                                genotype = "Unknown"
+                                for col in variant_row.index:
+                                    if '_GT' in col:
+                                        genotype = variant_row[col]
+                                        break
 
-                # Check if this variant is in the pharmcat results
-                is_used = rsid in gene_info['variants']
+                                variants[gene].append({
+                                    'rsid': variant_row['ID'],
+                                    'genotype': genotype
+                                })
 
-                # Assign an importance score based on:
-                # 1. Whether the variant is used by PharmCAT
-                # 2. Whether it's homozygous or heterozygous (more impact if homozygous)
-                importance = 0.0
-
-                if is_used:
-                    # Base importance for being used
-                    importance += 0.5
-
-                    # Additional importance based on genotype
-                    if genotype in ['1/1', '2/2']:  # Homozygous alternate
-                        importance += 0.3
-                    elif genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
-                        importance += 0.15
-
-                variant_importance[rsid] = importance
-
-                # Store variant details
-                variant_details[rsid] = {
-                    'position': str(row['POS']) if 'POS' in row else "Unknown",
-                    'ref': str(row['REF']) if 'REF' in row else "Unknown",
-                    'alt': str(row['ALT']) if 'ALT' in row else "Unknown",
-                    'genotype': str(genotype),
-                    'used_by_pharmcat': is_used
+                sample_data[sample_id] = {
+                    'phenotypes': phenotypes,
+                    'variants': variants
                 }
 
-            # Add extra importance to variants explicitly mentioned in the diplotype
-            diplotype = gene_info['diplotype']
-            diplotype_parts = str(diplotype).split('/')
+            except Exception as e:
+                print(f"Error loading data for sample {sample_id}: {e}")
 
-            for variant_id, details in variant_details.items():
-                for part in diplotype_parts:
-                    if variant_id in part:
-                        variant_importance[variant_id] += 0.5
-                        details['in_diplotype'] = True
+        return sample_data
 
-            # Normalize importance values
-            if variant_importance:
-                max_importance = max(variant_importance.values())
-                if max_importance > 0:
-                    for variant_id in variant_importance:
-                        variant_importance[variant_id] /= max_importance
+    def _analyze_variant_phenotype_correlations(self):
+        """Analyze correlations between variants and phenotypes across all samples"""
+        variant_correlations = {}
 
-            # Sort by importance
-            sorted_importance = dict(sorted(
-                variant_importance.items(),
-                key=lambda x: x[1],
-                reverse=True
-            ))
+        for gene in self.focus_genes:
+            variant_correlations[gene] = defaultdict(lambda: defaultdict(int))
 
-            # Check if the phenotypes match, considering possible mappings
-            pharmcat_phenotype = gene_info['phenotype']
-            ground_truth_phenotype = ground_truth.get(gene, "Unknown")
+            # Count occurrences of each variant-phenotype combination
+            for sample_id, data in self.all_sample_data.items():
+                if gene in data['phenotypes'] and gene in data['variants']:
+                    phenotype = data['phenotypes'][gene]
 
-            # Direct match
-            is_match = (pharmcat_phenotype == ground_truth_phenotype)
+                    # Skip indeterminate phenotypes for correlation analysis
+                    if phenotype == 'INDETERMINATE':
+                        continue
 
-            # Store results
-            results[gene] = {
-                'feature_importance': sorted_importance,
-                'variant_details': variant_details,
-                'pharmcat_phenotype': pharmcat_phenotype,
-                'ground_truth_phenotype': ground_truth_phenotype,
-                'match_accuracy': 1 if is_match else 0,
-                'diplotype': gene_info['diplotype'],
-                'allele1': gene_info['allele1'],
-                'allele2': gene_info['allele2'],
-                'pharmcat_variants': gene_info['variants']
+                    for variant in data['variants'][gene]:
+                        rsid = variant['rsid']
+                        genotype = variant['genotype']
+
+                        # Categorize genotype as homozygous/heterozygous
+                        if genotype in ['1/1', '2/2']:
+                            gtype = 'homozygous'
+                        elif genotype in ['0/1', '1/0', '0/2', '2/0']:
+                            gtype = 'heterozygous'
+                        else:
+                            gtype = 'other'
+
+                        # Increment counter for this variant-genotype-phenotype combination
+                        variant_correlations[gene][rsid][f"{gtype}_{phenotype}"] += 1
+
+        return variant_correlations
+
+    def load_vcf_csv(self, sample_id):
+        if sample_id in self.sample_to_csv:
+            try:
+                return pd.read_csv(self.sample_to_csv[sample_id])
+            except Exception as e:
+                print(f"Error reading VCF CSV for {sample_id}: {e}")
+        else:
+            print(f"No CSV file found for sample {sample_id}")
+        return None
+
+    def get_phenotype(self, sample_id, gene):
+        row = self.phenotypes[self.phenotypes['Sample ID'] == sample_id]
+        if not row.empty and gene in row.columns:
+            return row[gene].iloc[0]
+        return "Unknown"
+
+    def extract_gene_variants(self, vcf_df, gene):
+        if vcf_df is None or 'Gene' not in vcf_df.columns:
+            return pd.DataFrame()
+
+        return vcf_df[vcf_df['Gene'] == gene]
+
+    def analyze_variants(self, sample_id, vcf_df, gene, phenotype):
+        gene_variants = self.extract_gene_variants(vcf_df, gene)
+        if gene_variants.empty:
+            return {
+                'phenotype': phenotype,
+                'phenotype_description': self.phenotype_descriptions.get(phenotype, phenotype),
+                'variants': [],
+                'explanation': f"No variants found for gene {gene}. Phenotype determined to be {phenotype}."
             }
 
-        return results
+        # Extract relevant variant information
+        variants = []
+        for _, row in gene_variants.iterrows():
+            if 'ID' not in row or pd.isna(row['ID']):
+                continue
 
-    def analyze_decision_pathways(self, sample, results, vcf_df, match_df, phenotype_df):
-        if not results or match_df is None or phenotype_df is None:
-            return results
+            # Get genotype
+            genotype = "Unknown"
+            for col in row.index:
+                if '_GT' in col:
+                    genotype = row[col]
+                    break
 
-        for gene, gene_info in results.items():
-            # Get the top variants by importance
-            top_variants = list(gene_info['feature_importance'].keys())[:3]
+            # Calculate importance based on genotype and variant known effects
+            importance, confidence, reason = self._calculate_variant_importance(
+                sample_id, row['ID'], genotype, gene, phenotype
+            )
 
-            # Get the corresponding rows from match and phenotype dataframes
-            gene_matches = match_df[match_df['gene'] == gene]
-            gene_phenotypes = phenotype_df[phenotype_df['gene'] == gene]
+            variant = {
+                'rsid': row['ID'],
+                'position': str(row['POS']) if 'POS' in row else "Unknown",
+                'reference': str(row['REF']) if 'REF' in row else "Unknown",
+                'alternate': str(row['ALT']) if 'ALT' in row else "Unknown",
+                'genotype': genotype,
+                'importance': importance,
+                'confidence': confidence,
+                'importance_reason': reason,
+                'effect': self._get_variant_effect(row['ID'], gene, genotype, phenotype)
+            }
+            variants.append(variant)
 
-            # Extract diplotype and haplotype information
-            diplotypes = []
-            if not gene_matches.empty and 'diplotype_name' in gene_matches.columns:
-                diplotypes = gene_matches['diplotype_name'].dropna().unique().tolist()
+        # Sort variants by importance
+        variants.sort(key=lambda x: x['importance'], reverse=True)
 
-            haplotypes = []
-            if not gene_matches.empty:
-                for col in ['haplotype1_name', 'haplotype2_name', 'allele1_name', 'allele2_name']:
-                    if col in gene_matches.columns:
-                        haplotypes.extend(gene_matches[col].dropna().unique().tolist())
+        # Generate explanation
+        explanation = self._generate_explanation(gene, phenotype, variants)
 
-            # Extract variant to allele relationships
-            variant_allele_map = {}
-            for variant in top_variants:
-                variant_rows = pd.DataFrame()
-                if 'variant_rsids' in gene_matches.columns:
-                    variant_rows = gene_matches[
-                        gene_matches['variant_rsids'].notna() &
-                        gene_matches['variant_rsids'].str.contains(variant)
-                        ]
+        return {
+            'phenotype': phenotype,
+            'phenotype_description': self.phenotype_descriptions.get(phenotype, phenotype),
+            'variants': variants,
+            'explanation': explanation
+        }
 
-                if not variant_rows.empty:
-                    alleles = []
-                    for col in ['haplotype1_name', 'haplotype2_name', 'allele1_name', 'allele2_name']:
-                        if col in variant_rows.columns:
-                            alleles.extend(variant_rows[col].dropna().unique().tolist())
+    def _calculate_variant_importance(self, sample_id, rsid, genotype, gene, phenotype):
+        """Calculate variant importance based on multiple factors with explanation"""
+        # Start with moderate importance and confidence
+        importance = 0.5
+        confidence = 0.5
+        reasons = []
 
-                    variant_allele_map[variant] = list(set(alleles))
+        # 1. Check variant-phenotype association knowledge base
+        if rsid in self.variant_phenotype_effects and self.variant_phenotype_effects[rsid]['gene'] == gene:
+            association = self.variant_phenotype_effects[rsid]
+
+            # Determine genotype category
+            if genotype in ['1/1', '2/2']:
+                gtype = 'homozygous'
+            elif genotype in ['0/1', '1/0', '0/2', '2/0']:
+                gtype = 'heterozygous'
+            else:
+                gtype = 'unknown'
+
+            # If we have phenotype association data for this genotype
+            if 'phenotype_association' in association and gtype in association['phenotype_association']:
+                expected_phenotype = association['phenotype_association'][gtype]
+
+                # Phenotype match increases importance significantly
+                if expected_phenotype == phenotype:
+                    importance += 0.4
+                    confidence += 0.3
+                    reasons.append(f"Direct match with known {gtype} variant effect")
+                # Phenotype category match (e.g., both indicate decreased function but different degrees)
+                elif self._same_phenotype_category(expected_phenotype, phenotype):
+                    importance += 0.2
+                    confidence += 0.1
+                    reasons.append(f"Partial match with known {gtype} variant effect (same category)")
                 else:
-                    variant_allele_map[variant] = []
+                    # If expected phenotype doesn't match, this variant might be less important
+                    # for this specific phenotype assignment
+                    importance -= 0.1
+                    reasons.append(f"Known variant but phenotype doesn't match expected {expected_phenotype}")
+            else:
+                # Known variant but no specific genotype-phenotype data
+                importance += 0.1
+                reasons.append("Known functional variant but specific phenotype impact unknown")
 
-            # Add decision pathway information to results
-            results[gene]['decision_pathway'] = {
-                'top_variants': top_variants,
-                'diplotypes': diplotypes,
-                'haplotypes': haplotypes,
-                'variant_to_allele_map': variant_allele_map,
-                'phenotype_function': next((
-                    gene_phenotypes[col].iloc[0]
-                    for col in ['phenotype', 'activity_score']
-                    if col in gene_phenotypes.columns and not gene_phenotypes.empty and not pd.isna(
-                    gene_phenotypes[col].iloc[0])
-                ), "Unknown")
+        # 2. Check variant frequency across samples with same phenotype - data-driven approach
+        # This helps identify variants that consistently appear in samples with the same phenotype
+        variant_phenotype_counts = self._get_variant_phenotype_distribution(gene, rsid)
+        total_same_phenotype = sum(1 for s_id, data in self.all_sample_data.items()
+                                   if gene in data['phenotypes'] and data['phenotypes'][gene] == phenotype)
+
+        # Get count of this variant in samples with the same phenotype
+        same_phenotype_count = variant_phenotype_counts.get(phenotype, 0)
+
+        if total_same_phenotype > 0:
+            # If this variant appears in >50% of samples with this phenotype, it's likely important
+            if same_phenotype_count / total_same_phenotype > 0.5:
+                importance += 0.2
+                confidence += 0.2
+                reasons.append(
+                    f"Present in {same_phenotype_count}/{total_same_phenotype} samples with {phenotype} phenotype")
+            # If this variant appears in >80% of samples with this phenotype, it's very important
+            if same_phenotype_count / total_same_phenotype > 0.8:
+                importance += 0.2
+                confidence += 0.2
+                reasons.append("Strong statistical association with this phenotype")
+
+        # 3. Adjust for homozygous vs heterozygous
+        if genotype in ['1/1', '2/2']:  # Homozygous alternate
+            importance += 0.1
+            reasons.append("Homozygous variant typically has stronger effect")
+
+        # 4. Adjust importance based on existing clinical knowledge for specific variants
+        if gene == 'CYP3A5' and rsid == 'rs776746' and phenotype in ['PM', 'IM']:
+            importance += 0.1
+            confidence += 0.1
+            reasons.append("Key determinant of CYP3A5 metabolizer status")
+        elif gene == 'CYP2C19' and rsid in ['rs4244285', 'rs4986893'] and phenotype in ['PM', 'IM']:
+            importance += 0.1
+            confidence += 0.1
+            reasons.append("Major loss-of-function variant for CYP2C19")
+        elif gene == 'DPYD' and rsid == 'rs3918290' and phenotype in ['PM', 'IM']:
+            importance += 0.2
+            confidence += 0.2
+            reasons.append("Critical DPYD variant with strong clinical impact")
+
+        # Normalize values to 0-1 range
+        importance = min(max(importance, 0), 1)
+        confidence = min(max(confidence, 0), 1)
+
+        # Combine reasons into a single string
+        reason = "; ".join(reasons) if reasons else "Based on general variant assessment"
+
+        return importance, confidence, reason
+
+    def _same_phenotype_category(self, phenotype1, phenotype2):
+        """Check if two phenotypes fall into the same general category"""
+        # Find which category each phenotype belongs to
+        category1 = None
+        category2 = None
+
+        for category, phenotypes in self.phenotype_categories.items():
+            if phenotype1 in phenotypes:
+                category1 = category
+            if phenotype2 in phenotypes:
+                category2 = category
+
+        # Return True if they're in the same category
+        return category1 is not None and category1 == category2
+
+    def _get_variant_phenotype_distribution(self, gene, rsid):
+        """Get distribution of phenotypes for a specific variant across all samples"""
+        # Create key for caching
+        cache_key = f"{gene}_{rsid}"
+
+        # Check if we've already calculated this
+        if cache_key in self.variant_phenotype_distribution:
+            return self.variant_phenotype_distribution[cache_key]
+
+        # Count phenotype occurrences for this variant
+        phenotype_counts = defaultdict(int)
+
+        for sample_id, data in self.all_sample_data.items():
+            if gene in data['phenotypes'] and gene in data['variants']:
+                phenotype = data['phenotypes'][gene]
+
+                # Check if this sample has the variant
+                has_variant = any(v['rsid'] == rsid for v in data['variants'][gene])
+
+                if has_variant:
+                    phenotype_counts[phenotype] += 1
+
+        # Cache result
+        self.variant_phenotype_distribution[cache_key] = phenotype_counts
+
+        return phenotype_counts
+
+    def _get_variant_effect(self, rsid, gene, genotype, phenotype):
+        """Get detailed effect information for a variant"""
+        if rsid in self.variant_phenotype_effects and self.variant_phenotype_effects[rsid]['gene'] == gene:
+            variant_info = self.variant_phenotype_effects[rsid]
+
+            effect = variant_info['effect']
+            allele = variant_info.get('allele', '')
+            clinical_significance = variant_info.get('clinical_significance', '')
+
+            # Format genotype-specific effect
+            if genotype in ['1/1', '2/2']:  # Homozygous alternate
+                genotype_effect = "homozygous variant"
+            elif genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
+                genotype_effect = "heterozygous variant"
+            else:
+                genotype_effect = genotype
+
+            result = f"{effect} ({allele}, {genotype_effect})"
+
+            if clinical_significance:
+                result += f"\nClinical impact: {clinical_significance}"
+
+            return result
+
+        return "Unknown effect"
+
+    def _generate_explanation(self, gene, phenotype, variants):
+        """Generate a detailed human-readable explanation of the phenotype prediction"""
+        phenotype_desc = self.phenotype_descriptions.get(phenotype, phenotype)
+
+        if not variants:
+            return f"The {gene} phenotype was determined to be {phenotype} ({phenotype_desc}), but no specific variants were identified that contribute to this phenotype."
+
+        # Start with a general explanation
+        explanation = [
+            f"The {gene} phenotype was determined to be {phenotype} ({phenotype_desc}). This prediction is based on the following variants:"]
+
+        # Add details for top variants (up to 3 or fewer if not available)
+        num_variants = min(3, len(variants))
+        for i, variant in enumerate(variants[:num_variants], 1):
+            explanation.append(f"{i}. {variant['rsid']} - Genotype: {variant['genotype']}")
+            explanation.append(f"   Effect: {variant['effect']}")
+            explanation.append(f"   Importance: {variant['importance']:.2f} (Confidence: {variant['confidence']:.2f})")
+            explanation.append(f"   Reasoning: {variant['importance_reason']}")
+
+        # Add interpretation based on phenotype category
+        if phenotype in self.phenotype_categories['decreased']:
+            explanation.append(
+                f"\nThe combination of these variants suggests reduced {gene} function, leading to a {phenotype_desc} phenotype.")
+
+            # Add medication implications for decreased function
+            drug_implications = self._get_drug_implications(gene, 'decreased')
+            if drug_implications:
+                explanation.append(f"Clinical implications: {drug_implications}")
+
+        elif phenotype in self.phenotype_categories['increased']:
+            explanation.append(
+                f"\nThe combination of these variants suggests increased {gene} function, leading to a {phenotype_desc} phenotype.")
+
+            # Add medication implications for increased function
+            drug_implications = self._get_drug_implications(gene, 'increased')
+            if drug_implications:
+                explanation.append(f"Clinical implications: {drug_implications}")
+
+        elif phenotype in self.phenotype_categories['normal']:
+            explanation.append(
+                f"\nThe variants detected do not significantly impact {gene} function, resulting in a {phenotype_desc} phenotype.")
+
+        elif phenotype in self.phenotype_categories['indeterminate']:
+            explanation.append(
+                f"\nThere is insufficient or conflicting variant information to determine a clear {gene} phenotype.")
+
+        # Add diplotype information if available
+        diplotype = self._infer_diplotype(gene, variants)
+        if diplotype:
+            explanation.append(f"\nInferred diplotype: {diplotype}")
+
+        return "\n".join(explanation)
+
+    def _get_drug_implications(self, gene, function_category):
+        """Return clinical implications based on gene and function category"""
+        implications = {
+            'CYP2B6': {
+                'decreased': "May require reduced doses of drugs metabolized by CYP2B6 (e.g., efavirenz, bupropion).",
+                'increased': "May require increased doses of drugs metabolized by CYP2B6 due to faster clearance."
+            },
+            'CYP2C9': {
+                'decreased': "May require reduced doses of warfarin, phenytoin, and NSAIDs. Higher risk of adverse effects.",
+                'increased': "May have reduced efficacy with standard doses of CYP2C9 substrates."
+            },
+            'CYP2C19': {
+                'decreased': "May have reduced efficacy of clopidogrel. May require lower doses of PPIs and certain antidepressants.",
+                'increased': "May have increased risk of bleeding with clopidogrel. May require higher doses of PPIs."
+            },
+            'CYP3A5': {
+                'decreased': "May require lower doses of tacrolimus, cyclosporine and other CYP3A5 substrates.",
+                'increased': "May require higher doses of tacrolimus and other CYP3A5 substrates."
+            },
+            'SLCO1B1': {
+                'decreased': "Increased risk of statin-induced myopathy. Consider lower statin doses or alternative statins.",
+                'increased': "May have lower plasma concentrations of statins and other SLCO1B1 substrates."
+            },
+            'TPMT': {
+                'decreased': "Increased risk of thiopurine toxicity. Requires significant dose reduction of azathioprine, 6-MP, and 6-TG.",
+                'increased': "May require higher doses of thiopurines to achieve therapeutic effect."
+            },
+            'DPYD': {
+                'decreased': "Increased risk of severe toxicity with fluoropyrimidines. Requires dose reduction or alternative therapy.",
+                'increased': "May have reduced efficacy with standard doses of fluoropyrimidines."
             }
+        }
 
-        return results
+        if gene in implications and function_category in implications[gene]:
+            return implications[gene][function_category]
+        return ""
 
-    def explain_decisions(self, sample, results):
-        if not results:
-            return results
+    def _infer_diplotype(self, gene, variants):
+        """Attempt to infer diplotype from variant information"""
+        # This is a simplified approach - real diplotype calling is more complex
 
-        for gene, gene_info in results.items():
-            explanation = []
+        if not variants:
+            return ""
 
-            explanation.append(f"Analysis for gene {gene}:")
-            explanation.append(f"PharmCAT called phenotype: {gene_info['pharmcat_phenotype']}")
-            explanation.append(f"Ground truth phenotype: {gene_info['ground_truth_phenotype']}")
-            explanation.append(f"Match accuracy: {'Correct' if gene_info['match_accuracy'] == 1 else 'Incorrect'}")
+        # Get known allele-defining variants
+        allele_variants = {}
+        for variant in variants:
+            rsid = variant['rsid']
+            genotype = variant['genotype']
 
-            explanation.append(f"Diplotype: {gene_info['diplotype']}")
-            explanation.append(f"Allele 1: {gene_info['allele1']}")
-            explanation.append(f"Allele 2: {gene_info['allele2']}")
+            if rsid in self.variant_phenotype_effects and self.variant_phenotype_effects[rsid]['gene'] == gene:
+                allele = self.variant_phenotype_effects[rsid].get('allele', '')
+                if allele:
+                    if genotype in ['1/1', '2/2']:  # Homozygous
+                        allele_variants[allele] = 'homozygous'
+                    elif genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
+                        allele_variants[allele] = 'heterozygous'
 
-            explanation.append("\nMost important variants in decision (ranked by importance):")
-            for i, (variant, importance) in enumerate(list(gene_info['feature_importance'].items())[:5], 1):
-                variant_details = gene_info['variant_details'].get(variant, {})
-                genotype = variant_details.get('genotype', 'Unknown')
-                used_by_pharmcat = variant_details.get('used_by_pharmcat', False)
-                in_diplotype = variant_details.get('in_diplotype', False)
+        # Construct diplotype string
+        if not allele_variants:
+            return f"{gene}*1/*1 (presumed wild type)"
 
-                status = []
-                if used_by_pharmcat:
-                    status.append("Used by PharmCAT")
-                if in_diplotype:
-                    status.append("In diplotype")
-                status_str = ", ".join(status) if status else "Not directly used"
+        if len(allele_variants) == 1:
+            allele, zygosity = list(allele_variants.items())[0]
 
-                explanation.append(
-                    f"{i}. {variant} (Importance: {importance:.2f}, Genotype: {genotype}, Status: {status_str})")
+            if zygosity == 'homozygous':
+                # Extract allele number from string (e.g., CYP2C9*2 -> *2)
+                allele_num = allele.split('*')[1] if '*' in allele else allele
+                return f"{gene}*{allele_num}/*{allele_num}"
+            else:
+                # Extract allele number from string
+                allele_num = allele.split('*')[1] if '*' in allele else allele
+                return f"{gene}*1/*{allele_num}"
 
-                if variant in gene_info['variant_details']:
-                    details = gene_info['variant_details'][variant]
-                    explanation.append(f"   Position: {details.get('position', 'Unknown')}")
-                    explanation.append(f"   Reference allele: {details.get('ref', 'Unknown')}")
-                    explanation.append(f"   Alternate allele: {details.get('alt', 'Unknown')}")
+        elif len(allele_variants) > 1:
+            # For multiple allele variants, construct a compound diplotype
+            # This is simplified and may not be accurate for all cases
+            allele_strings = []
+            for allele, zygosity in allele_variants.items():
+                # Extract allele number
+                allele_num = allele.split('*')[1] if '*' in allele else allele
+                allele_strings.append(f"*{allele_num}")
 
-            if 'decision_pathway' in gene_info:
-                pathway = gene_info['decision_pathway']
+            return f"{gene}{'/'.join(allele_strings)}"
 
-                explanation.append("\nDecision pathway:")
-                for variant in pathway['top_variants']:
-                    alleles = pathway['variant_to_allele_map'].get(variant, [])
-                    alleles_str = ", ".join(alleles) if alleles else "No specific alleles"
-                    explanation.append(f"Variant {variant} → Contributes to alleles: {alleles_str}")
+        return ""
 
-                explanation.append(f"Alleles → Diplotype: {gene_info['diplotype']}")
-                explanation.append(f"Diplotype → Phenotype: {gene_info['pharmcat_phenotype']}")
+    def run(self):
+        results = {}
 
-            results[gene]['explanation'] = "\n".join(explanation)
+        # Process each sample in the phenotypes file
+        for _, row in self.phenotypes.iterrows():
+            sample_id = row['Sample ID']
+            print(f"Processing sample: {sample_id}")
 
-        return results
+            # Load VCF CSV data
+            vcf_df = self.load_vcf_csv(sample_id)
+            if vcf_df is None:
+                print(f"Skipping sample {sample_id} due to missing data")
+                continue
 
-    def save_results(self, sample, results):
-        if not results:
-            return
+            sample_results = {}
 
-        os.makedirs(self.output_dir, exist_ok=True)
-        output_file = os.path.join(self.output_dir, f"{sample}_results.json")
+            # Analyze each gene
+            for gene in self.focus_genes:
+                if gene in row:
+                    phenotype = row[gene]
+                    gene_results = self.analyze_variants(sample_id, vcf_df, gene, phenotype)
+                    sample_results[gene] = gene_results
 
+            results[sample_id] = sample_results
+
+        # Save all results to a single JSON file
+        output_file = os.path.join(self.output_dir, "pharmcat_explanations.json")
         with open(output_file, 'w') as f:
             json.dump(results, f, indent=4)
 
-        print(f"Results saved to {output_file}")
-
-    def run(self):
-        all_results = {}
-
-        for sample in self.samples:
-            print(f"\nProcessing sample: {sample}")
-
-            vcf_df = self.load_vcf_csv(sample)
-            match_df = self.load_match_csv(sample)
-            phenotype_df = self.load_phenotype_csv(sample)
-
-            if vcf_df is None or match_df is None or phenotype_df is None:
-                print(f"Skipping sample {sample} due to missing data")
-                continue
-
-            sample_ground_truth = self.get_ground_truth_for_sample(sample)
-
-            pharmcat_data = self.extract_pharmcat_data(sample, match_df, phenotype_df)
-
-            results = self.direct_variant_analysis(sample, vcf_df, pharmcat_data, sample_ground_truth)
-
-            results = self.analyze_decision_pathways(sample, results, vcf_df, match_df, phenotype_df)
-
-            results = self.explain_decisions(sample, results)
-
-            self.save_results(sample, results)
-
-            all_results[sample] = results
-
-        # Save combined results
-        combined_output_file = os.path.join(self.output_dir, "all_samples_results.json")
-        with open(combined_output_file, 'w') as f:
-            json.dump(all_results, f, indent=4)
-
-        print(f"\nCombined results saved to {combined_output_file}")
-
-        return all_results
+        print(f"Explanations saved to {output_file}")
+        return results
 
 
 def main():
+    # Initialize with appropriate directories
     explainer = PharmcatExplainer()
-    results = explainer.run()
-
-    print(f"\nAnalysis complete! Results saved to {explainer.output_dir}")
+    explainer.run()
+    print("Analysis complete!")
 
 
 if __name__ == "__main__":
