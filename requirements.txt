@@ -1,7 +1,5 @@
-pandas
 matplotlib
-seaborn
 numpy
-tqdm
+pandas
+seaborn
 shap
-scikit-learn
