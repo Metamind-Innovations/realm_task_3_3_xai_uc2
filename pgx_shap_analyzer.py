@@ -12,233 +12,9 @@ import shap
 # Target genes for analysis
 TARGET_GENES = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
 
-# Phenotype mappings for numerical representation
-PHENOTYPE_MAPPING = {
-    "PM": 0,  # Poor Metabolizer
-    "IM": 1,  # Intermediate Metabolizer
-    "NM": 2,  # Normal Metabolizer
-    "RM": 3,  # Rapid Metabolizer
-    "UM": 4,  # Ultrarapid Metabolizer
-    "NF": 5,  # Normal Function
-    "DF": 6,  # Decreased Function
-    "PF": 7,  # Poor Function
-    "IF": 8,  # Increased Function
-    "INDETERMINATE": 9  # Indeterminate
-}
-REVERSE_PHENOTYPE_MAPPING = {v: k for k, v in PHENOTYPE_MAPPING.items()}
-
-# Phenotype descriptions for human-readable output
-PHENOTYPE_DESCRIPTIONS = {
-    'NM': 'Normal Metabolizer',
-    'IM': 'Intermediate Metabolizer',
-    'PM': 'Poor Metabolizer',
-    'UM': 'Ultra Rapid Metabolizer',
-    'RM': 'Rapid Metabolizer',
-    'NF': 'Normal Function',
-    'DF': 'Decreased Function',
-    'IF': 'Increased Function',
-    'PF': 'Poor Function',
-    'INDETERMINATE': 'Indeterminate'
-}
-
-# Phenotype categories for biological meaning
-PHENOTYPE_CATEGORIES = {
-    'decreased': ['PM', 'IM', 'DF', 'PF'],
-    'normal': ['NM', 'NF'],
-    'increased': ['UM', 'RM', 'IF'],
-    'indeterminate': ['INDETERMINATE']
-}
-
-# Variant-phenotype knowledge base
-VARIANT_PHENOTYPE_EFFECTS = {
-    # CYP2B6
-    'rs3745274': {
-        'gene': 'CYP2B6',
-        'allele': 'CYP2B6*6',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Affects metabolism of efavirenz, nevirapine, and other drugs'
-    },
-    'rs2279343': {
-        'gene': 'CYP2B6',
-        'allele': 'CYP2B6*4',
-        'effect': 'Increased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'RM',
-            'heterozygous': 'IM'
-        }
-    },
-    'rs8192709': {
-        'gene': 'CYP2B6',
-        'allele': 'CYP2B6*2',
-        'effect': 'Altered enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'IM',
-            'heterozygous': 'NM'
-        }
-    },
-
-    # CYP2C9
-    'rs1799853': {
-        'gene': 'CYP2C9',
-        'allele': 'CYP2C9*2',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Affects metabolism of warfarin, phenytoin, NSAIDs'
-    },
-    'rs1057910': {
-        'gene': 'CYP2C9',
-        'allele': 'CYP2C9*3',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Significant impact on warfarin dosing'
-    },
-
-    # CYP2C19
-    'rs4244285': {
-        'gene': 'CYP2C19',
-        'allele': 'CYP2C19*2',
-        'effect': 'Loss of function',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Affects metabolism of clopidogrel, PPIs, antidepressants'
-    },
-    'rs4986893': {
-        'gene': 'CYP2C19',
-        'allele': 'CYP2C19*3',
-        'effect': 'Loss of function',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        }
-    },
-    'rs12248560': {
-        'gene': 'CYP2C19',
-        'allele': 'CYP2C19*17',
-        'effect': 'Increased expression',
-        'phenotype_association': {
-            'homozygous': 'UM',
-            'heterozygous': 'RM'
-        },
-        'clinical_significance': 'Enhanced conversion of clopidogrel to active metabolite'
-    },
-    'rs3758581': {
-        'gene': 'CYP2C19',
-        'allele': 'CYP2C19*1',
-        'effect': 'Normal function',
-        'phenotype_association': {
-            'homozygous': 'NM',
-            'heterozygous': 'NM'
-        }
-    },
-
-    # CYP3A5
-    'rs776746': {
-        'gene': 'CYP3A5',
-        'allele': 'CYP3A5*3',
-        'effect': 'Non-functional enzyme',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Affects metabolism of tacrolimus and other immunosuppressants'
-    },
-
-    # SLCO1B1
-    'rs4149056': {
-        'gene': 'SLCO1B1',
-        'allele': 'SLCO1B1*5',
-        'effect': 'Decreased transporter function',
-        'phenotype_association': {
-            'homozygous': 'PF',
-            'heterozygous': 'DF'
-        },
-        'clinical_significance': 'Increased risk of statin-induced myopathy'
-    },
-    'rs2306283': {
-        'gene': 'SLCO1B1',
-        'allele': 'SLCO1B1*1B',
-        'effect': 'Increased transporter function',
-        'phenotype_association': {
-            'homozygous': 'IF',
-            'heterozygous': 'NF'
-        }
-    },
-
-    # TPMT
-    'rs1800462': {
-        'gene': 'TPMT',
-        'allele': 'TPMT*2',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Increased risk of thiopurine toxicity'
-    },
-    'rs1800460': {
-        'gene': 'TPMT',
-        'allele': 'TPMT*3B',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        }
-    },
-    'rs1142345': {
-        'gene': 'TPMT',
-        'allele': 'TPMT*3C',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Most common decreased function allele'
-    },
-
-    # DPYD
-    'rs3918290': {
-        'gene': 'DPYD',
-        'allele': 'DPYD*2A',
-        'effect': 'Complete loss of function, splice site mutation',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'High risk of severe fluoropyrimidine toxicity'
-    },
-    'rs55886062': {
-        'gene': 'DPYD',
-        'allele': 'DPYD*13',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Increased risk of fluoropyrimidine toxicity'
-    },
-    'rs67376798': {
-        'gene': 'DPYD',
-        'allele': 'DPYD c.2846A>T',
-        'effect': 'Decreased enzyme activity',
-        'phenotype_association': {
-            'homozygous': 'PM',
-            'heterozygous': 'IM'
-        },
-        'clinical_significance': 'Moderate risk of fluoropyrimidine toxicity'
-    }
-}
+SAMPLE_ID_COL = 'Sample ID'
+CSV_EXT = "*.csv"
+CSV_SUFFIX = ".csv"
 
 
 class VCFParser:
@@ -305,7 +81,7 @@ class VCFParser:
 
     def vcf_to_csv(self, vcf_file, output_csv=None):
         if output_csv is None:
-            output_csv = os.path.splitext(vcf_file)[0] + '.csv'
+            output_csv = os.path.splitext(vcf_file)[0] + CSV_SUFFIX
 
         df = self.parse_vcf(vcf_file)
         if df is not None:
@@ -350,7 +126,7 @@ def load_csv_data(csv_files):
             print(f"Error loading {csv_file}: {str(e)}")
 
     if not all_data:
-        raise ValueError(f"No valid CSV files found")
+        raise ValueError("No valid CSV files found")
 
     combined_df = pd.concat(all_data, ignore_index=True)
     return combined_df
@@ -370,37 +146,24 @@ def extract_features(variant_data):
         if variant_id == '.' or pd.isna(variant_id):
             variant_id = f"{row['CHROM']}_{row['POS']}"
 
-        # Try to find GT column (format may vary)
+        # Try to find GT column
         gt_col = None
         for col in row.index:
             if '_GT' in col:
                 gt_col = col
                 break
 
-        if gt_col:
-            genotype = row[gt_col]
-        else:
-            # Default to 0/0 if GT not found
-            genotype = "0/0"
+        genotype = row[gt_col] if gt_col else "0/0"
 
-        # Add basic variant-present feature
+        # Add basic features
         feature_name = f"{gene}_{variant_id}"
-        features[sample][feature_name] = 1
+        features[sample][feature_name] = 1  # This variant IS present in this sample
 
-        # Add specific genotype features
+        # Add genotype-specific features
         if genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
             features[sample][f"{feature_name}_het"] = 1
         elif genotype in ['1/1', '2/2']:  # Homozygous alt
             features[sample][f"{feature_name}_hom"] = 1
-
-        # Add known allele features if applicable
-        if variant_id in VARIANT_PHENOTYPE_EFFECTS:
-            allele = VARIANT_PHENOTYPE_EFFECTS[variant_id].get('allele', '')
-            if allele:
-                if genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
-                    features[sample][f"{allele}_het"] = 1
-                elif genotype in ['1/1', '2/2']:  # Homozygous alt
-                    features[sample][f"{allele}_hom"] = 1
 
     # Convert to dataframe
     samples = list(features.keys())
@@ -419,40 +182,61 @@ def extract_features(variant_data):
 def prepare_targets(phenotypes_file, feature_samples):
     phenotypes_df = pd.read_csv(phenotypes_file)
 
-    # Ensure 'Sample ID' column exists
-    if 'Sample ID' not in phenotypes_df.columns:
-        raise ValueError(f"No 'Sample ID' column found in {phenotypes_file}")
+    # Ensure Sample ID column exists
+    if SAMPLE_ID_COL not in phenotypes_df.columns:
+        raise ValueError(f"No '{SAMPLE_ID_COL}' column found in {phenotypes_file}")
 
     # Filter to samples in feature matrix
-    phenotypes_df = phenotypes_df[phenotypes_df['Sample ID'].isin(feature_samples)]
+    phenotypes_df = phenotypes_df[phenotypes_df[SAMPLE_ID_COL].isin(feature_samples)]
 
     # Set index to Sample ID
-    phenotypes_df = phenotypes_df.set_index('Sample ID')
+    phenotypes_df = phenotypes_df.set_index(SAMPLE_ID_COL)
 
-    # Convert phenotypes to numeric using mapping
+    # Create phenotype mapping on-the-fly
     Y = pd.DataFrame(index=phenotypes_df.index)
+    phenotype_mappings = {}
 
     for gene in TARGET_GENES:
         if gene in phenotypes_df.columns:
-            Y[gene] = phenotypes_df[gene].map(lambda x: PHENOTYPE_MAPPING.get(x, 9) if pd.notna(x) else 9)
+            # Get unique phenotypes and create mapping
+            unique_phenotypes = sorted(phenotypes_df[gene].dropna().unique())
+            phenotype_to_num = {phenotype: i for i, phenotype in enumerate(unique_phenotypes)}
+            phenotype_mappings[gene] = phenotype_to_num
 
-    return Y, phenotypes_df
+            # Apply mapping
+            Y[gene] = phenotypes_df[gene].map(lambda x: phenotype_to_num.get(x, -1) if pd.notna(x) else -1)
+
+    return Y, phenotypes_df, phenotype_mappings
 
 
-def run_shap_analysis(X, Y, max_samples=100, n_background=50):
-    np.random.seed(42)  # For reproducibility
+def create_prediction_function(y_sample, gene):
+    def predict_gene(x, y_sample=y_sample):
+        if len(x) == len(y_sample):
+            return y_sample[gene].values
+
+        # For other shapes, sample from distribution
+        rng = np.random.Generator(np.random.PCG64())
+        vals = y_sample[gene].values
+        return rng.choice(vals, size=len(x))
+
+    return predict_gene
+
+
+def run_shap_analysis(X, Y, phenotype_mappings, max_samples=100):
+    rng = np.random.Generator(np.random.PCG64(seed=42))
     results = {}
 
-    # Limit to a reasonable number of samples for performance
+    # Limit samples for performance
     if len(X) > max_samples:
-        sample_indices = np.random.choice(len(X), max_samples, replace=False)
+        sample_indices = rng.choice(len(X), max_samples, replace=False)
         X_sample = X.iloc[sample_indices]
         y_sample = Y.iloc[sample_indices]
     else:
         X_sample = X
         y_sample = Y
 
-    # Create background dataset for SHAP
+    # Create background data
+    n_background = min(50, len(X_sample))
     if len(X_sample) > n_background:
         background = shap.sample(X_sample.values, n_background)
     else:
@@ -467,24 +251,15 @@ def run_shap_analysis(X, Y, max_samples=100, n_background=50):
 
         print(f"Running SHAP analysis for {gene}...")
 
-        # Create prediction function for this gene
-        def predict_gene(x):
-            # For SHAP explainer, we need a function that predicts based on the feature vectors
-            # Using a pre-existing model doesn't make sense in this context since we're explaining PharmCAT
-            # Instead, we map each feature vector to its corresponding phenotype
+        # Create reverse mapping (numeric to phenotype)
+        num_to_phenotype = {v: k for k, v in phenotype_mappings[gene].items()}
 
-            # If input shape matches our samples, return the actual values
-            if len(x) == len(X_sample):
-                return y_sample[gene].values
-
-            # Otherwise, for consistency in the KernelExplainer, return values based on
-            # the distribution in our dataset
-            vals = y_sample[gene].values
-            return np.random.choice(vals, size=len(x))
+        # Create prediction function
+        predict_func = create_prediction_function(y_sample, gene)
 
         # Create SHAP explainer
         explainer = shap.KernelExplainer(
-            predict_gene,
+            predict_func,
             background,
             link="identity",
             feature_names=feature_names
@@ -498,13 +273,27 @@ def run_shap_analysis(X, Y, max_samples=100, n_background=50):
             "shap_values": shap_values,
             "feature_names": feature_names,
             "sample_indices": X_sample.index.tolist(),
-            "predictions": y_sample[gene].tolist()
+            "predictions": y_sample[gene].tolist(),
+            "num_to_phenotype": num_to_phenotype
         }
 
     return results
 
 
-def enriched_results_json(shap_results, X, phenotypes_df, variant_data, output_file):
+def generate_variant_explanation(feature, effect):
+    feature_parts = feature.split('_')
+    variant_text = f"{feature}"
+
+    if len(feature_parts) > 1:
+        gene = feature_parts[0]
+        variant = feature_parts[1]
+        if variant and gene:
+            variant_text = f"{variant} in {gene}"
+
+    return f"{variant_text} with {effect} contribution"
+
+
+def create_enriched_results(shap_results, X, output_file):
     json_results = {
         "gene_explanations": {},
         "feature_importance": {},
@@ -517,157 +306,96 @@ def enriched_results_json(shap_results, X, phenotypes_df, variant_data, output_f
         feature_names = result["feature_names"]
         sample_indices = result["sample_indices"]
         predictions = result["predictions"]
+        num_to_phenotype = result["num_to_phenotype"]
 
-        # Calculate overall feature importance
+        # Calculate feature importance
         abs_shap = np.abs(shap_values)
         importance = abs_shap.mean(axis=0)
-
-        # Get top features
-        top_indices = np.argsort(-importance)[:20]  # Top 20 features
+        top_indices = np.argsort(-importance)[:20]
 
         # Store feature importance
-        gene_importance_dict = {}
-        for i in top_indices:
-            if i < len(feature_names):
-                feature = feature_names[i]
-                feature_imp = float(importance[i])
-                gene_importance_dict[feature] = feature_imp
+        gene_importance = {}
+        for idx in top_indices:
+            if idx < len(feature_names):
+                feature = feature_names[idx]
+                gene_importance[feature] = float(importance[idx])
 
-                # Add clinical significance if available
-                rsid = feature.split('_')[1] if len(feature.split('_')) > 1 else None
-                if rsid in VARIANT_PHENOTYPE_EFFECTS and VARIANT_PHENOTYPE_EFFECTS[rsid]['gene'] == gene:
-                    clinical_info = VARIANT_PHENOTYPE_EFFECTS[rsid].get('clinical_significance', '')
-                    if clinical_info:
-                        gene_importance_dict[f"{feature}_clinical"] = clinical_info
-
-        json_results["feature_importance"][gene] = gene_importance_dict
-
-        # Extract gene from feature name
-        def get_gene_from_feature(feature):
-            parts = feature.split('_')
-            return parts[0] if parts else "Unknown"
+        json_results["feature_importance"][gene] = gene_importance
 
         # Group features by gene
-        gene_features = defaultdict(list)
-        for i in top_indices:
-            if i < len(feature_names):
-                feature = feature_names[i]
-                feature_gene = get_gene_from_feature(feature)
-                if feature_gene in TARGET_GENES:  # Only include target genes
-                    # Add additional information for each variant
-                    rsid = feature.split('_')[1] if len(feature.split('_')) > 1 else None
-                    feature_info = {
+        features_by_gene = defaultdict(list)
+        for idx in top_indices:
+            if idx < len(feature_names):
+                feature = feature_names[idx]
+                feature_gene = feature.split('_')[0] if '_' in feature else "Unknown"
+
+                if feature_gene in TARGET_GENES:
+                    features_by_gene[feature_gene].append({
                         "feature": feature,
-                        "importance": float(importance[i])
-                    }
+                        "importance": float(importance[idx])
+                    })
 
-                    # Add variant information if available
-                    if rsid in VARIANT_PHENOTYPE_EFFECTS:
-                        var_info = VARIANT_PHENOTYPE_EFFECTS[rsid]
-                        if var_info['gene'] == feature_gene:
-                            feature_info["allele"] = var_info.get('allele', '')
-                            feature_info["effect"] = var_info.get('effect', '')
-                            feature_info["clinical_significance"] = var_info.get('clinical_significance', '')
-
-                    gene_features[feature_gene].append(feature_info)
-
-        # Store gene explanations
+        # Count phenotype distribution
         phenotype_counts = {}
         for pred in predictions:
-            phenotype = REVERSE_PHENOTYPE_MAPPING.get(pred, "Unknown")
+            phenotype = num_to_phenotype.get(pred, "Unknown")
             phenotype_counts[phenotype] = phenotype_counts.get(phenotype, 0) + 1
 
-        gene_explanation = {
+        # Store gene explanation
+        json_results["gene_explanations"][gene] = {
             "prediction_distribution": phenotype_counts,
             "top_features_by_gene": {
-                gene: features for gene, features in gene_features.items()
+                g: features for g, features in features_by_gene.items()
             }
         }
 
-        json_results["gene_explanations"][gene] = gene_explanation
-
-        # Add sample explanations (limit to 10)
+        # Add sample explanations (limited to 10)
         for i in range(min(10, len(sample_indices))):
             sample = sample_indices[i]
             pred = predictions[i]
-            phenotype = REVERSE_PHENOTYPE_MAPPING.get(pred, "Unknown")
-            phenotype_desc = PHENOTYPE_DESCRIPTIONS.get(phenotype, "Unknown")
+            phenotype = num_to_phenotype.get(pred, "Unknown")
 
             # Get SHAP values for this sample
             sample_shap = shap_values[i]
-
-            # Get top contributing features
             top_contrib_indices = np.argsort(-np.abs(sample_shap))[:10]
-            top_contributions = []
 
+            # Collect top contributions
+            top_contributions = []
             for j in top_contrib_indices:
                 if j < len(feature_names):
                     feature = feature_names[j]
-                    # Extract variant ID if present
-                    parts = feature.split('_')
-                    rsid = parts[1] if len(parts) > 1 else None
-
                     contrib = {
                         "feature": feature,
                         "value": float(X.loc[sample, feature]),
                         "shap_value": float(sample_shap[j])
                     }
-
-                    # Add variant information if available
-                    if rsid in VARIANT_PHENOTYPE_EFFECTS:
-                        var_info = VARIANT_PHENOTYPE_EFFECTS[rsid]
-                        if var_info['gene'] == gene:
-                            contrib["allele"] = var_info.get('allele', '')
-                            contrib["effect"] = var_info.get('effect', '')
-                            contrib["clinical_significance"] = var_info.get('clinical_significance', '')
-
                     top_contributions.append(contrib)
 
             # Generate explanation text
-            explanation_text = f"The {gene} phenotype is {phenotype} ({phenotype_desc}). "
+            explanation = f"The {gene} phenotype is {phenotype}. "
 
-            # Add information about which category this phenotype falls into
-            for category, phenotypes in PHENOTYPE_CATEGORIES.items():
-                if phenotype in phenotypes:
-                    explanation_text += f"This indicates {category} function. "
-                    break
-
-            # Add information about top contributing variants
             if top_contributions:
-                explanation_text += "Key contributing variants include: "
+                explanation += "Key contributing variants include: "
                 variant_descriptions = []
 
-                for contrib in top_contributions[:3]:  # Top 3 for brevity
+                for contrib in top_contributions[:3]:
                     feature = contrib["feature"]
                     shap_val = contrib["shap_value"]
                     effect = "positive" if shap_val > 0 else "negative"
+                    variant_descriptions.append(
+                        generate_variant_explanation(feature, effect)
+                    )
 
-                    # Get rsid if available
-                    parts = feature.split('_')
-                    rsid = parts[1] if len(parts) > 1 else None
+                explanation += ", ".join(variant_descriptions)
 
-                    if rsid and rsid in VARIANT_PHENOTYPE_EFFECTS:
-                        allele = VARIANT_PHENOTYPE_EFFECTS[rsid].get('allele', '')
-                        var_effect = VARIANT_PHENOTYPE_EFFECTS[rsid].get('effect', '')
-                        if allele and var_effect:
-                            variant_descriptions.append(f"{rsid} ({allele}, {var_effect}) with {effect} contribution")
-                        else:
-                            variant_descriptions.append(f"{rsid} with {effect} contribution")
-                    else:
-                        variant_descriptions.append(f"{feature} with {effect} contribution")
-
-                explanation_text += ", ".join(variant_descriptions)
-
-            sample_explanation = {
+            # Add sample explanation
+            json_results["sample_explanations"].append({
                 "sample_id": str(sample),
                 "gene": gene,
                 "predicted_phenotype": phenotype,
-                "phenotype_description": phenotype_desc,
                 "top_contributions": top_contributions,
-                "explanation": explanation_text
-            }
-
-            json_results["sample_explanations"].append(sample_explanation)
+                "explanation": explanation
+            })
 
     # Write to file
     with open(output_file, 'w') as f:
@@ -689,129 +417,105 @@ def generate_summary_report(json_results, output_dir):
         num_samples = len(set([exp['sample_id'] for exp in json_results['sample_explanations']]))
         f.write(f"Total samples analyzed: {num_samples}\n\n")
 
-        # Gene-by-gene summary
         f.write("## Gene Summaries\n")
 
         for gene, gene_data in json_results['gene_explanations'].items():
             f.write(f"\n### {gene}\n")
 
-            # Phenotype distribution
             f.write("Phenotype distribution:\n")
             for phenotype, count in gene_data['prediction_distribution'].items():
-                desc = PHENOTYPE_DESCRIPTIONS.get(phenotype, "")
-                f.write(f"- {phenotype} ({desc}): {count}\n")
+                f.write(f"- {phenotype}: {count}\n")
 
-            # Top features
             f.write("\nTop contributing features:\n")
             all_features = []
-            for gene_name, features in gene_data['top_features_by_gene'].items():
+            for _, features in gene_data['top_features_by_gene'].items():
                 all_features.extend(features)
 
             # Sort by importance
             all_features.sort(key=lambda x: x['importance'], reverse=True)
 
-            for i, feature in enumerate(all_features[:10]):  # Top 10
-                f.write(f"{i + 1}. {feature['feature']} - Importance: {feature['importance']:.4f}")
-
-                if 'allele' in feature and feature['allele']:
-                    f.write(f" - {feature['allele']}")
-
-                if 'effect' in feature and feature['effect']:
-                    f.write(f" - {feature['effect']}")
-
-                f.write("\n")
+            for i, feature in enumerate(all_features[:10]):
+                f.write(f"{i + 1}. {feature['feature']} - Importance: {feature['importance']:.4f}\n")
 
             f.write("\n")
 
-        # Sample explanations
         f.write("## Sample Explanations\n")
 
-        for i, sample in enumerate(json_results['sample_explanations'][:5]):  # First 5 samples
+        for i, sample in enumerate(json_results['sample_explanations'][:5]):
             f.write(f"\n### Sample {sample['sample_id']} - {sample['gene']}\n")
-            f.write(f"Phenotype: {sample['predicted_phenotype']} ({sample['phenotype_description']})\n")
+            f.write(f"Phenotype: {sample['predicted_phenotype']}\n")
             f.write(f"Explanation: {sample['explanation']}\n")
 
             f.write("Top contributions:\n")
-            for j, contrib in enumerate(sample['top_contributions'][:5]):  # Top 5 contributions
-                f.write(f"{j + 1}. {contrib['feature']} - SHAP value: {contrib['shap_value']:.4f}")
-
-                if 'allele' in contrib and contrib['allele']:
-                    f.write(f" - {contrib['allele']}")
-
-                if 'clinical_significance' in contrib and contrib['clinical_significance']:
-                    f.write(f" - {contrib['clinical_significance']}")
-
-                f.write("\n")
+            for j, contrib in enumerate(sample['top_contributions'][:5]):
+                f.write(f"{j + 1}. {contrib['feature']} - SHAP value: {contrib['shap_value']:.4f}\n")
 
     print(f"Summary report saved to {summary_file}")
     return summary_file
 
 
+def find_csv_files(input_dir):
+    # Direct CSV files
+    csv_files = glob.glob(os.path.join(input_dir, CSV_EXT))
+    if csv_files:
+        return csv_files
+
+    # Check preprocessed directory
+    preprocessed_dir = os.path.join(input_dir, "preprocessed")
+    if os.path.exists(preprocessed_dir):
+        return glob.glob(os.path.join(preprocessed_dir, CSV_EXT))
+
+    return []
+
+
 def main():
     parser = argparse.ArgumentParser(description='PharmCAT SHAP-based explainer')
-    parser.add_argument('--input_dir', required=True, help='Directory containing VCF files or preprocessed CSV files')
+    parser.add_argument('--input_dir', required=True, help='Directory containing VCF or CSV files')
     parser.add_argument('--phenotypes_file', required=True, help='Path to phenotypes.csv file')
     parser.add_argument('--output_dir', default='pgx_shap_results', help='Output directory for results')
     parser.add_argument('--convert_vcf', action='store_true', help='Convert VCF files to CSV format')
     parser.add_argument('--max_samples', type=int, default=100, help='Maximum number of samples for SHAP analysis')
     args = parser.parse_args()
-
-    # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-
-    # Step 1: Preprocess input data if needed
     print(f"Processing input data from {args.input_dir}...")
 
+    input_files = []
     if args.convert_vcf:
-        sample_to_file, csv_dir = preprocess_input_data(args.input_dir, os.path.join(args.output_dir, "preprocessed"))
+        _, csv_dir = preprocess_input_data(args.input_dir, os.path.join(args.output_dir, "preprocessed"))
+        input_files = glob.glob(os.path.join(csv_dir, CSV_EXT))
         print(f"Converted VCF files to CSV format in {csv_dir}")
-        input_files = glob.glob(os.path.join(csv_dir, "*.csv"))
     else:
-        # Check if input_dir contains CSV files directly
-        csv_files = glob.glob(os.path.join(args.input_dir, "*.csv"))
-        if csv_files:
-            input_files = csv_files
-        else:
-            # Check if input_dir contains preprocessed directory with CSV files
-            preprocessed_dir = os.path.join(args.input_dir, "preprocessed")
-            if os.path.exists(preprocessed_dir):
-                input_files = glob.glob(os.path.join(preprocessed_dir, "*.csv"))
-            else:
-                raise ValueError(f"No CSV files found in {args.input_dir}. Use --convert_vcf to convert VCF files.")
+        input_files = find_csv_files(args.input_dir)
+        if not input_files:
+            raise ValueError(f"No CSV files found in {args.input_dir}. Use --convert_vcf to convert VCF files.")
 
     print(f"Found {len(input_files)} input files")
 
-    # Step 2: Load and combine CSV data
     print("Loading CSV data...")
     variant_data = load_csv_data(input_files)
     print(f"Loaded data for {variant_data['Sample'].nunique()} samples")
 
-    # Step 3: Extract features
     print("Extracting features...")
     X = extract_features(variant_data)
     print(f"Created feature matrix with {X.shape[0]} samples and {X.shape[1]} features")
 
-    # Step 4: Prepare target phenotypes
     print(f"Loading phenotypes from {args.phenotypes_file}...")
-    Y, phenotypes_df = prepare_targets(args.phenotypes_file, X.index)
+    Y, phenotypes_df, phenotype_mappings = prepare_targets(args.phenotypes_file, X.index)
     print(f"Prepared target matrix with {Y.shape[0]} samples")
 
     # Ensure same samples in X and Y
     common_samples = X.index.intersection(Y.index)
     X = X.loc[common_samples]
     Y = Y.loc[common_samples]
-    print(f"Using {len(common_samples)} samples common to both feature and target matrices")
+    print(f"Using {len(common_samples)} samples common to both matrices")
 
-    # Step 5: Run SHAP analysis
     print("Running SHAP analysis...")
-    shap_results = run_shap_analysis(X, Y, max_samples=args.max_samples)
+    shap_results = run_shap_analysis(X, Y, phenotype_mappings, max_samples=args.max_samples)
 
-    # Step 6: Prepare enriched JSON results
-    print("Preparing enriched results...")
+    print("Preparing results...")
     json_output_file = os.path.join(args.output_dir, "pgx_shap_results.json")
-    json_results = enriched_results_json(shap_results, X, phenotypes_df, variant_data, json_output_file)
+    json_results = create_enriched_results(shap_results, X, json_output_file)
 
-    # Step 7: Generate summary report
     print("Generating summary report...")
     summary_file = generate_summary_report(json_results, args.output_dir)
 
