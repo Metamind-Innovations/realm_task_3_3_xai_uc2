@@ -175,67 +175,68 @@ def run_pharmcat_analysis(
 ):
     import os
     import subprocess
+    import sys
+    import shutil
 
     os.makedirs(pharmcat_results.path, exist_ok=True)
 
-    # List directories to debug
     print(f"Project files directory contents: {os.listdir(project_files.path)}")
 
-    # Build the Docker image
-    dockerfile_path = os.path.join(project_files.path, "Dockerfile")
-    if not os.path.exists(dockerfile_path):
-        raise Exception(f"Dockerfile not found at {dockerfile_path}")
-
+    # Find the scripts directory
     scripts_dir = os.path.join(project_files.path, "scripts")
     if not os.path.exists(scripts_dir):
         raise Exception(f"Scripts directory not found at {scripts_dir}")
 
-    # Install Docker
-    subprocess.run(["apt-get", "update"], check=True)
-    subprocess.run(["apt-get", "install", "-y", "docker.io"], check=True)
-
-    # Start Docker service
-    subprocess.run(["service", "docker", "start"], check=True)
-
-    # Create a temporary build directory
-    build_dir = "/tmp/build"
-    os.makedirs(build_dir, exist_ok=True)
-
-    # Copy Dockerfile and scripts to build directory
-    subprocess.run(["cp", dockerfile_path, f"{build_dir}/Dockerfile"], check=True)
-    subprocess.run(["cp", "-r", scripts_dir, f"{build_dir}/scripts"], check=True)
-
-    # Copy requirements.txt if it exists
+    # Install required dependencies from requirements.txt
     req_file = os.path.join(project_files.path, "requirements.txt")
     if os.path.exists(req_file):
-        subprocess.run(["cp", req_file, f"{build_dir}/requirements.txt"], check=True)
+        subprocess.run(["pip", "install", "-r", req_file], check=True)
 
-    # Build the Docker image
-    print("Building Docker image...")
-    subprocess.run(
-        ["docker", "build", "-t", "pharmcat-realm", build_dir],
-        check=True
-    )
+    # Add the scripts directory to Python path
+    sys.path.append(os.path.dirname(scripts_dir))
 
-    # Run the Docker container
-    print(f"Running Docker container with input={input_data.path} and output={pharmcat_results.path}")
-    subprocess.run(
-        ["docker", "run",
-         "-v", f"{input_data.path}:/data",
-         "-v", f"{pharmcat_results.path}:/result",
-         "pharmcat-realm",
-         "--input_folder", "/data",
-         "--result_folder", "/result"
-         ],
-        check=True
-    )
+    # Make sure helper_scripts directory exists
+    helper_scripts_dir = os.path.join(scripts_dir, "helper_scripts")
+    if not os.path.exists(helper_scripts_dir):
+        os.makedirs(helper_scripts_dir, exist_ok=True)
 
-    # Verify the results
-    result_files = os.listdir(pharmcat_results.path)
-    print(f"Files in result directory: {result_files}")
+    # Make sure __init__.py exists in both directories
+    with open(os.path.join(scripts_dir, "__init__.py"), "w") as f:
+        pass
 
-    if "phenotypes.csv" not in result_files:
-        raise Exception("PharmCAT analysis failed: phenotypes.csv not found")
+    with open(os.path.join(helper_scripts_dir, "__init__.py"), "w") as f:
+        pass
+
+    # Copy any required files from input to appropriate locations
+    print(f"Files in input_data: {os.listdir(input_data.path)}")
+
+    # Run the pharmcat_folder_processor.py script directly
+    pharmcat_script = os.path.join(scripts_dir, "pharmcat_folder_processor.py")
+    if not os.path.exists(pharmcat_script):
+        raise Exception(f"PharmCAT processor script not found at {pharmcat_script}")
+
+    print(f"Running PharmCAT script: {pharmcat_script}")
+
+    # Run the script with the specified input and output directories
+    try:
+        subprocess.run([
+            "python", pharmcat_script,
+            "--input_folder", input_data.path,
+            "--result_folder", pharmcat_results.path
+        ], check=True)
+
+        print(f"PharmCAT processing completed. Files in result directory:")
+        for file in os.listdir(pharmcat_results.path):
+            print(f"  - {file}")
+
+    except subprocess.CalledProcessError as e:
+        print(f"PharmCAT processing failed: {str(e)}")
+        raise Exception("Failed to run PharmCAT processor")
+
+    # Verify the phenotypes.csv file was created
+    phenotypes_csv = os.path.join(pharmcat_results.path, "phenotypes.csv")
+    if not os.path.exists(phenotypes_csv):
+        raise Exception("PharmCAT processing failed: phenotypes.csv not found")
 
     print("PharmCAT analysis completed successfully")
 
