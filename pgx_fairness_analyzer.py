@@ -82,9 +82,9 @@ def load_demographic_data(demographic_file):
         raise ValueError(f"Error loading demographic data: {str(e)}")
 
 
-def load_phenotype_data(phenotype_file):
+def load_phenotype_data(phenotypes_file):
     try:
-        df = pd.read_csv(phenotype_file)
+        df = pd.read_csv(phenotypes_file)
         print(f"Phenotype file columns: {df.columns.tolist()}")
         return df
     except Exception as e:
@@ -529,7 +529,7 @@ def generate_overall_report(merged_data, distributions, fairness_metrics, impact
 def main():
     parser = argparse.ArgumentParser(description='PharmCAT Fairness/Bias Analyzer')
     parser.add_argument('--demographic_file', required=True, help='Path to demographic data CSV file')
-    parser.add_argument('--phenotype_file', required=True, help='Path to phenotype predictions CSV file')
+    parser.add_argument('--phenotypes_file', required=True, help='Path to phenotype predictions CSV file')
     parser.add_argument('--output_dir', default='pgx_fairness_results', help='Output directory for results')
     args = parser.parse_args()
 
@@ -540,8 +540,8 @@ def main():
     print(f"Loading demographic data from {args.demographic_file}...")
     demographic_df = load_demographic_data(args.demographic_file)
 
-    print(f"Loading phenotype data from {args.phenotype_file}...")
-    phenotype_df = load_phenotype_data(args.phenotype_file)
+    print(f"Loading phenotype data from {args.phenotypes_file}...")
+    phenotype_df = load_phenotype_data(args.phenotypes_file)
 
     # Merge data
     print("Merging demographic and phenotype data...")
