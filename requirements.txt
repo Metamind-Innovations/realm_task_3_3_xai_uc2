@@ -3,3 +3,5 @@ numpy
 pandas
 seaborn
 shap
+kfp
+kubernetes
