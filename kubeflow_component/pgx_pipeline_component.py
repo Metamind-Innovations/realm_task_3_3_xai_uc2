@@ -164,7 +164,7 @@ def download_pharmcat_project(
 
 
 @kfp.dsl.component(
-    base_image="python:3.9-slim",
+    base_image="python:3.12-slim",
     packages_to_install=["pandas", "setuptools<69.0.0"]
 )
 def run_pharmcat_analysis(
@@ -200,16 +200,13 @@ def run_pharmcat_analysis(
     os.makedirs(pharmcat_results.path, exist_ok=True)
     os.chmod(pharmcat_results.path, 0o777)
 
-    # Build Docker image from provided Dockerfile
-    print("\nBuilding PharmCAT Docker image...")
+    # Pull Docker image from Docker Hub
+    print("\nPulling PharmCAT Docker image from Docker Hub...")
     subprocess.run([
-        "docker", "build",
-        "-t", "pharmcat-realm",
-        "-f", os.path.join(project_files.path, "Dockerfile"),
-        project_files.path
+        "docker", "pull", "gigakos/pharmcat-realm"
     ], check=True)
 
-    # Run PharmCAT Docker container
+    # Run PharmCAT Docker container using pre-built image
     try:
         print("\nRunning PharmCAT Docker container...")
         result = subprocess.run([
@@ -217,7 +214,7 @@ def run_pharmcat_analysis(
             "--rm",
             "-v", f"{input_data.path}:/data",
             "-v", f"{pharmcat_results.path}:/result",
-            "pharmcat-realm",
+            "gigakos/pharmcat-realm",
             "--input_folder", "/data",
             "--result_folder", "/result"
         ], capture_output=True, text=True, check=True)
