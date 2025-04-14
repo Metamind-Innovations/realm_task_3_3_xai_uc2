@@ -3,5 +3,5 @@ numpy
 pandas
 seaborn
 shap
-kfp
+kfp==2.0.1
 kubernetes
