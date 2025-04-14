@@ -372,35 +372,43 @@ def pharmcat_pipeline(
         github_repo_url: str,
         branch: str = "main"
 ):
+    # Disable caching for the download task
     download_task = download_pharmcat_project(
         github_repo_url=github_repo_url,
         branch=branch
     )
+    download_task.set_caching_options(False)
 
+    # Disable caching for the PharmCAT analysis task
     pharmcat_task = run_pharmcat_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"]
     )
+    pharmcat_task.set_caching_options(False)
     pharmcat_task.set_cpu_request("2")
     pharmcat_task.set_cpu_limit("4")
     pharmcat_task.set_memory_request("4G")
     pharmcat_task.set_memory_limit("8G")
 
+    # Disable caching for the SHAP analysis task
     shap_task = run_shap_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"],
         pharmcat_results=pharmcat_task.outputs["pharmcat_results"]
     )
+    shap_task.set_caching_options(False)
     shap_task.set_cpu_request("2")
     shap_task.set_cpu_limit("4")
     shap_task.set_memory_request("4G")
     shap_task.set_memory_limit("8G")
 
+    # Disable caching for the fairness analysis task
     fairness_task = run_fairness_analysis(
         project_files=download_task.outputs["project_files"],
         demographic_data=download_task.outputs["demographic_data"],
         pharmcat_results=pharmcat_task.outputs["pharmcat_results"]
     )
+    fairness_task.set_caching_options(False)
     fairness_task.set_cpu_request("2")
     fairness_task.set_cpu_limit("4")
     fairness_task.set_memory_request("4G")
