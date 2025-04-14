@@ -41,12 +41,15 @@ def setup_pharmcat():
 
 def process_vcf(file_path, output_dir):
     """Process a single VCF file"""
+    command = ['/pharmcat/pharmcat_pipeline',
+               '-vcf', str(file_path),
+               '-o', str(output_dir),
+               '-reporterJson',
+               '-matcher', '-phenotyper']
+    print(f"Executing PharmCAT command: {' '.join(command)}")
     try:
         result = subprocess.run(
-            ['/pharmcat/pharmcat_pipeline', str(file_path),
-             '-o', str(output_dir),
-             '-reporterJson',
-             '-matcher', '-phenotyper'],
+            command,
             capture_output=True,
             text=True,
             check=True
