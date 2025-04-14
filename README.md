@@ -240,7 +240,7 @@ The project focuses on the key pharmacogenes: **CYP2B6, CYP2C9, CYP2C19, CYP3A5,
 ## Getting Started
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.10
 - Docker (for running PharmCAT)
 - Required Python packages (install via `pip install -r requirements.txt`)
 
