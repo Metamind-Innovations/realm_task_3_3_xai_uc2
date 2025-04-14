@@ -14,6 +14,7 @@ def download_pharmcat_project(
         demographic_data: Output[Dataset],
         branch: str = "main"  # Default branch if not in URL
 ):
+    # --- (Code for downloading project files remains the same) ---
     import os
     import subprocess
     import shutil
@@ -136,11 +137,13 @@ def download_pharmcat_project(
             print(f"Copied pgx_cohort.csv from {demo_file}")
     else:
         print("Warning: Demographics data (pgx_cohort.csv) not found in repository")
+    # --- (End of download code) ---
 
 
+# Component 2: Run PharmCAT analysis
 @kfp.dsl.component(
     base_image="python:3.10-slim",
-    packages_to_install=["pandas"]
+    packages_to_install=["pandas"]  # Keep pandas if needed for other parts
 )
 def run_pharmcat_analysis(
         project_files: Input[Model],
@@ -155,76 +158,48 @@ def run_pharmcat_analysis(
     # Create results directory
     os.makedirs(pharmcat_results.path, exist_ok=True)
 
-    # Install Java which is needed for PharmCAT
-    subprocess.run(["apt-get", "update"], check=True)
-    subprocess.run(["apt-get", "install", "-y", "openjdk-17-jre-headless", "wget"], check=True)
+    # --- Removed Redundant PharmCAT Setup ---
+    # The setup (Java install, wget, PharmCAT download, wrapper script)
+    # will now be handled by the pharmcat_folder_processor.py script itself.
+    # ---
 
-    # Create PharmCAT directories
-    os.makedirs("/pharmcat", exist_ok=True)
-    os.makedirs("/tmp/pharmcat", exist_ok=True)
-
-    # Download PharmCAT jar with the correct filename
-    subprocess.run([
-        "wget", "-O", "/pharmcat/pharmcat.jar",
-        "https://github.com/PharmGKB/PharmCAT/releases/download/v2.15.1/pharmcat-2.15.1-all.jar"
-    ], check=True)
-
-    # Create PharmCAT wrapper script
-    with open("/pharmcat/pharmcat_pipeline", "w") as f:
-        f.write("#!/bin/bash\n")
-        f.write('java -jar /pharmcat/pharmcat.jar "$@"\n')
-
-    os.chmod("/pharmcat/pharmcat_pipeline", 0o755)
-
-    # Copy the necessary scripts
+    # Copy the necessary scripts from the downloaded project files
     scripts_dir = os.path.join(project_files.path, "scripts")
     if not os.path.exists(scripts_dir):
         raise Exception(f"Scripts directory not found: {scripts_dir}")
 
-    # Create scripts directory structure
+    # Create scripts directory structure in the component's file system
+    # This is where the processor script will be placed to run.
     os.makedirs("/scripts", exist_ok=True)
     os.makedirs("/scripts/helper_scripts", exist_ok=True)
 
     # Copy processor script
-    processor_script = os.path.join(scripts_dir, "pharmcat_folder_processor.py")
-    if not os.path.exists(processor_script):
-        raise Exception(f"PharmCAT processor script not found: {processor_script}")
+    processor_script_src = os.path.join(scripts_dir, "pharmcat_folder_processor.py")
+    processor_script_dst = "/scripts/pharmcat_folder_processor.py"
+    if not os.path.exists(processor_script_src):
+        raise Exception(f"PharmCAT processor script not found: {processor_script_src}")
+    shutil.copy2(processor_script_src, processor_script_dst)
 
-    # First, copy the script
-    shutil.copy2(processor_script, "/scripts/pharmcat_folder_processor.py")
-
-    # Now modify it to fix the JAR path
-    with open("/scripts/pharmcat_folder_processor.py", "r") as f:
-        content = f.read()
-
-    # Replace the JAR filename in the setup_pharmcat function
-    modified_content = content.replace(
-        "pharmcat-2.15.1.jar",
-        "pharmcat-2.15.1-all.jar"
-    )
-
-    # Also modify the setup_pharmcat function to skip download if file exists
-    modified_content = modified_content.replace(
-        'subprocess.run([\n        "wget", "-O", "/pharmcat/pharmcat.jar",',
-        'if not os.path.exists("/pharmcat/pharmcat.jar"):\n        subprocess.run([\n            "wget", "-O", "/pharmcat/pharmcat.jar",'
-    )
-
-    with open("/scripts/pharmcat_folder_processor.py", "w") as f:
-        f.write(modified_content)
+    # --- Removed modification of the copied script ---
+    # The original pharmcat_folder_processor.py will handle setup via its setup_pharmcat() function.
+    # ---
 
     # Copy helper scripts
-    helper_scripts_dir = os.path.join(scripts_dir, "helper_scripts")
-    if os.path.exists(helper_scripts_dir):
-        for helper_script in os.listdir(helper_scripts_dir):
-            src_path = os.path.join(helper_scripts_dir, helper_script)
-            dst_path = os.path.join("/scripts/helper_scripts", helper_script)
+    helper_scripts_dir_src = os.path.join(scripts_dir, "helper_scripts")
+    helper_scripts_dir_dst = "/scripts/helper_scripts"
+    if os.path.exists(helper_scripts_dir_src):
+        for helper_script in os.listdir(helper_scripts_dir_src):
+            src_path = os.path.join(helper_scripts_dir_src, helper_script)
+            dst_path = os.path.join(helper_scripts_dir_dst, helper_script)
             shutil.copy2(src_path, dst_path)
 
     # Run the PharmCAT processor script
+    # This script will now perform the setup (downloading PharmCAT etc.) itself
     try:
         print("\nRunning PharmCAT processor...")
+        # Execute the copied script
         result = subprocess.run([
-            "python", "/scripts/pharmcat_folder_processor.py",
+            "python", processor_script_dst,  # Use the destination path
             "--input_folder", input_data.path,
             "--result_folder", pharmcat_results.path
         ], capture_output=True, text=True, check=True)
@@ -265,6 +240,7 @@ def run_shap_analysis(
         pharmcat_results: Input[Dataset],
         shap_results: Output[Dataset]
 ):
+    # --- (Code for SHAP analysis remains the same) ---
     import os
     import subprocess
 
@@ -288,10 +264,10 @@ def run_shap_analysis(
     # Run SHAP analysis
     command = [
         "python", shap_script,
-        "--input_dir", input_data.path,
+        "--input_dir", input_data.path,  # Assuming SHAP needs original VCFs or processed data
         "--phenotypes_file", phenotypes_csv,
         "--output_dir", shap_results.path,
-        "--convert_vcf"
+        "--convert_vcf"  # Ensure this flag is appropriate for your SHAP script
     ]
     print(f"Running command: {' '.join(command)}")
 
@@ -301,6 +277,7 @@ def run_shap_analysis(
         raise Exception("SHAP analysis failed: pgx_shap_results.json not found")
 
     print("SHAP analysis completed successfully")
+    # --- (End of SHAP code) ---
 
 
 # Component 4: Run fairness analysis
@@ -314,6 +291,7 @@ def run_fairness_analysis(
         pharmcat_results: Input[Dataset],
         fairness_results: Output[Dataset]
 ):
+    # --- (Code for fairness analysis remains the same) ---
     import os
     import subprocess
     import glob
@@ -361,9 +339,10 @@ def run_fairness_analysis(
         raise Exception("Fairness analysis failed: overall_fairness_report.json not found")
 
     print("Fairness analysis completed successfully")
+    # --- (End of fairness code) ---
 
 
-# Pipeline to tie everything together
+# Pipeline definition
 @kfp.dsl.pipeline(
     name="PharmCAT PGx Analysis Pipeline",
     description="Pipeline for pharmacogenomics analysis with PharmCAT, SHAP, and fairness evaluation"
@@ -372,51 +351,56 @@ def pharmcat_pipeline(
         github_repo_url: str,
         branch: str = "main"
 ):
-    # Disable caching for the download task
+    # Component 1: Download
     download_task = download_pharmcat_project(
         github_repo_url=github_repo_url,
         branch=branch
     )
-    download_task.set_caching_options(False)
+    download_task.set_caching_options(False)  # Keep caching disabled if needed
 
-    # Disable caching for the PharmCAT analysis task
+    # Component 2: Run PharmCAT (now relies on the processor script for setup)
     pharmcat_task = run_pharmcat_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"]
     )
-    pharmcat_task.set_caching_options(False)
+    pharmcat_task.set_caching_options(False)  # Keep caching disabled if needed
+    # Resource requests remain the same
     pharmcat_task.set_cpu_request("2")
     pharmcat_task.set_cpu_limit("4")
     pharmcat_task.set_memory_request("4G")
     pharmcat_task.set_memory_limit("8G")
 
-    # Disable caching for the SHAP analysis task
+    # Component 3: Run SHAP
     shap_task = run_shap_analysis(
         project_files=download_task.outputs["project_files"],
-        input_data=download_task.outputs["input_data"],
+        input_data=download_task.outputs["input_data"],  # Pass original data if needed by SHAP script
         pharmcat_results=pharmcat_task.outputs["pharmcat_results"]
     )
-    shap_task.set_caching_options(False)
+    shap_task.set_caching_options(False)  # Keep caching disabled if needed
+    # Resource requests remain the same
     shap_task.set_cpu_request("2")
     shap_task.set_cpu_limit("4")
     shap_task.set_memory_request("4G")
     shap_task.set_memory_limit("8G")
 
-    # Disable caching for the fairness analysis task
+    # Component 4: Run Fairness
     fairness_task = run_fairness_analysis(
         project_files=download_task.outputs["project_files"],
         demographic_data=download_task.outputs["demographic_data"],
         pharmcat_results=pharmcat_task.outputs["pharmcat_results"]
     )
-    fairness_task.set_caching_options(False)
+    fairness_task.set_caching_options(False)  # Keep caching disabled if needed
+    # Resource requests remain the same
     fairness_task.set_cpu_request("2")
     fairness_task.set_cpu_limit("4")
     fairness_task.set_memory_request("4G")
     fairness_task.set_memory_limit("8G")
 
 
+# Compile the pipeline
 if __name__ == "__main__":
     kfp.compiler.Compiler().compile(
         pipeline_func=pharmcat_pipeline,
-        package_path="pharmcat_pipeline.yaml"
+        package_path="pharmcat_pipeline_v2.yaml"  # Changed output filename
     )
+    print("Pipeline compiled to pharmcat_pipeline_v2.yaml")
