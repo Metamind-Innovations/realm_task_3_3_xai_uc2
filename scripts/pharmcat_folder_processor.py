@@ -28,7 +28,7 @@ def setup_pharmcat():
     # Download PharmCAT
     subprocess.run([
         'wget', '-O', '/pharmcat/pharmcat.jar',
-        'https://github.com/PharmGKB/PharmCAT/releases/download/v2.15.1/pharmcat-2.15.1.jar'
+        'https://github.com/PharmGKB/PharmCAT/releases/download/v2.15.1/pharmcat-2.15.1-all.jar'
     ], check=True)
 
     # Create PharmCAT wrapper script
@@ -45,7 +45,7 @@ def process_vcf(file_path, output_dir):
         result = subprocess.run(
             ['/pharmcat/pharmcat_pipeline', str(file_path),
              '-o', str(output_dir),
-             '-reporterJson', '--missing-to-ref',
+             '-reporterJson',
              '-matcher', '-phenotyper'],
             capture_output=True,
             text=True,

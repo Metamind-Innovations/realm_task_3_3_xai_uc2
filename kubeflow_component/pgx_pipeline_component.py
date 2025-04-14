@@ -4,7 +4,7 @@ from kfp.dsl import Dataset, Input, Output, Model
 
 # Component 1: Download project files
 @kfp.dsl.component(
-    base_image="python:3.12-slim",
+    base_image="python:3.10-slim",  # Use Python 3.10 instead of 3.12
     packages_to_install=["requests"]
 )
 def download_pharmcat_project(
@@ -27,12 +27,11 @@ def download_pharmcat_project(
     # Extract branch from URL if present
     branch_match = re.search(r"/tree/([^/]+)", github_repo_url)
     if branch_match:
-        # Override the branch parameter with the one from URL
         url_branch = branch_match.group(1)
         print(f"Extracted branch '{url_branch}' from URL")
         branch = url_branch
 
-    # Need to clean URL for git clone format (required for git, not optional)
+    # Clean URL for git clone format
     repo_url = re.sub(r"/tree/[^/]+/?$", "", github_repo_url.strip())
     if not repo_url.endswith(".git"):
         repo_url = repo_url.rstrip("/") + ".git"
@@ -61,17 +60,6 @@ def download_pharmcat_project(
         print(f"Git clone failed with error: {e.stderr}")
         raise Exception(f"Failed to clone repository: {repo_url}, branch: {branch}")
 
-    # List all directories and files recursively to see the actual structure
-    print("Repository structure:")
-    for root, dirs, files in os.walk(temp_dir):
-        level = root.replace(temp_dir, '').count(os.sep)
-        indent = ' ' * 4 * level
-        print(f"{indent}{os.path.basename(root)}/")
-        sub_indent = ' ' * 4 * (level + 1)
-        for file in files:
-            if file != '.git' and not file.startswith('.'):
-                print(f"{sub_indent}{file}")
-
     # Find key files recursively
     print("Searching for key files...")
 
@@ -98,14 +86,6 @@ def download_pharmcat_project(
         print(f"Copied requirements.txt from {req_files[0]}")
     else:
         print("Warning: requirements.txt not found in repository")
-
-    # Find Dockerfile
-    docker_files = glob.glob(os.path.join(temp_dir, "**", "Dockerfile"), recursive=True)
-    if docker_files:
-        shutil.copy2(docker_files[0], os.path.join(project_files.path, "Dockerfile"))
-        print(f"Copied Dockerfile from {docker_files[0]}")
-    else:
-        print("Warning: Dockerfile not found in repository")
 
     # Find scripts directory
     scripts_dirs = []
@@ -157,15 +137,10 @@ def download_pharmcat_project(
     else:
         print("Warning: Demographics data (pgx_cohort.csv) not found in repository")
 
-    # List files in output directories
-    print(f"Files in project_files: {os.listdir(project_files.path)}")
-    print(f"Files in input_data: {os.listdir(input_data.path)}")
-    print(f"Files in demographic_data/Demographics: {os.listdir(os.path.join(demographic_data.path, 'Demographics'))}")
-
 
 @kfp.dsl.component(
-    base_image="python:3.12-slim",
-    packages_to_install=["pandas", "setuptools<69.0.0"]
+    base_image="python:3.10-slim",
+    packages_to_install=["pandas"]
 )
 def run_pharmcat_analysis(
         project_files: Input[Model],
@@ -174,60 +149,94 @@ def run_pharmcat_analysis(
 ):
     import os
     import subprocess
+    import shutil
     from pathlib import Path
-
-    # Install system dependencies first
-    print("Installing system dependencies...")
-    subprocess.run(["apt-get", "update"], check=True)
-    subprocess.run([
-        "apt-get", "install", "-y",
-        "docker.io",
-        "openjdk-17-jre-headless"
-    ], check=True)
-
-    # Print environment info
-    print("\nProject files contents:")
-    for root, dirs, files in os.walk(project_files.path):
-        print(f"\nDirectory: {root}")
-        for f in files:
-            print(f"- {f}")
-
-    print("\nInput directory contents:")
-    for f in os.listdir(input_data.path):
-        print(f"- {f}")
 
     # Create results directory
     os.makedirs(pharmcat_results.path, exist_ok=True)
-    os.chmod(pharmcat_results.path, 0o777)
 
-    # Pull Docker image from Docker Hub
-    print("\nPulling PharmCAT Docker image from Docker Hub...")
+    # Install Java which is needed for PharmCAT
+    subprocess.run(["apt-get", "update"], check=True)
+    subprocess.run(["apt-get", "install", "-y", "openjdk-17-jre-headless", "wget"], check=True)
+
+    # Create PharmCAT directories
+    os.makedirs("/pharmcat", exist_ok=True)
+    os.makedirs("/tmp/pharmcat", exist_ok=True)
+
+    # Download PharmCAT jar with the correct filename
     subprocess.run([
-        "docker", "pull", "gigakos/pharmcat-realm"
+        "wget", "-O", "/pharmcat/pharmcat.jar",
+        "https://github.com/PharmGKB/PharmCAT/releases/download/v2.15.1/pharmcat-2.15.1-all.jar"
     ], check=True)
 
-    # Run PharmCAT Docker container using pre-built image
+    # Create PharmCAT wrapper script
+    with open("/pharmcat/pharmcat_pipeline", "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write('java -jar /pharmcat/pharmcat.jar "$@"\n')
+
+    os.chmod("/pharmcat/pharmcat_pipeline", 0o755)
+
+    # Copy the necessary scripts
+    scripts_dir = os.path.join(project_files.path, "scripts")
+    if not os.path.exists(scripts_dir):
+        raise Exception(f"Scripts directory not found: {scripts_dir}")
+
+    # Create scripts directory structure
+    os.makedirs("/scripts", exist_ok=True)
+    os.makedirs("/scripts/helper_scripts", exist_ok=True)
+
+    # Copy processor script
+    processor_script = os.path.join(scripts_dir, "pharmcat_folder_processor.py")
+    if not os.path.exists(processor_script):
+        raise Exception(f"PharmCAT processor script not found: {processor_script}")
+
+    # First, copy the script
+    shutil.copy2(processor_script, "/scripts/pharmcat_folder_processor.py")
+
+    # Now modify it to fix the JAR path
+    with open("/scripts/pharmcat_folder_processor.py", "r") as f:
+        content = f.read()
+
+    # Replace the JAR filename in the setup_pharmcat function
+    modified_content = content.replace(
+        "pharmcat-2.15.1.jar",
+        "pharmcat-2.15.1-all.jar"
+    )
+
+    # Also modify the setup_pharmcat function to skip download if file exists
+    modified_content = modified_content.replace(
+        'subprocess.run([\n        "wget", "-O", "/pharmcat/pharmcat.jar",',
+        'if not os.path.exists("/pharmcat/pharmcat.jar"):\n        subprocess.run([\n            "wget", "-O", "/pharmcat/pharmcat.jar",'
+    )
+
+    with open("/scripts/pharmcat_folder_processor.py", "w") as f:
+        f.write(modified_content)
+
+    # Copy helper scripts
+    helper_scripts_dir = os.path.join(scripts_dir, "helper_scripts")
+    if os.path.exists(helper_scripts_dir):
+        for helper_script in os.listdir(helper_scripts_dir):
+            src_path = os.path.join(helper_scripts_dir, helper_script)
+            dst_path = os.path.join("/scripts/helper_scripts", helper_script)
+            shutil.copy2(src_path, dst_path)
+
+    # Run the PharmCAT processor script
     try:
-        print("\nRunning PharmCAT Docker container...")
+        print("\nRunning PharmCAT processor...")
         result = subprocess.run([
-            "docker", "run",
-            "--rm",
-            "-v", f"{input_data.path}:/data",
-            "-v", f"{pharmcat_results.path}:/result",
-            "gigakos/pharmcat-realm",
-            "--input_folder", "/data",
-            "--result_folder", "/result"
+            "python", "/scripts/pharmcat_folder_processor.py",
+            "--input_folder", input_data.path,
+            "--result_folder", pharmcat_results.path
         ], capture_output=True, text=True, check=True)
 
-        print("\nPharmCAT Output:")
+        print("\nPharmCAT Processor Output:")
         print(result.stdout)
 
         if result.stderr:
-            print("\nPharmCAT Warnings/Errors:")
+            print("\nPharmCAT Processor Warnings/Errors:")
             print(result.stderr)
-
     except subprocess.CalledProcessError as e:
-        print("\nError running PharmCAT container:")
+        print("\nError running PharmCAT processor:")
         print("stdout:", e.stdout)
         print("stderr:", e.stderr)
         raise Exception("Failed to process VCF files")
@@ -247,7 +256,7 @@ def run_pharmcat_analysis(
 
 # Component 3: Run SHAP analysis
 @kfp.dsl.component(
-    base_image="python:3.12-slim",
+    base_image="python:3.10-slim",
     packages_to_install=["matplotlib", "numpy", "pandas", "seaborn", "shap"]
 )
 def run_shap_analysis(
@@ -296,7 +305,7 @@ def run_shap_analysis(
 
 # Component 4: Run fairness analysis
 @kfp.dsl.component(
-    base_image="python:3.12-slim",
+    base_image="python:3.10-slim",
     packages_to_install=["numpy", "pandas", "scipy"]
 )
 def run_fairness_analysis(
