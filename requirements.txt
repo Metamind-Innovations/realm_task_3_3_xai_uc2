@@ -1,6 +1,7 @@
 matplotlib
 numpy
 pandas==2.2.3
+scikit-learn
 seaborn
 shap
 kfp==2.12.0
