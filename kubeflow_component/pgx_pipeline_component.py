@@ -330,7 +330,7 @@ def run_fairness_analysis(
 
 
 @kfp.dsl.pipeline(
-    name="PharmCAT PGx Analysis Pipeline v4 (Dockerized)",
+    name="PharmCAT PGx Analysis Pipeline (Dockerized)",
     description="Pipeline using pre-built Docker image for PharmCAT analysis"
 )
 def pharmcat_pipeline(
@@ -377,5 +377,4 @@ def pharmcat_pipeline(
 
 if __name__ == "__main__":
     compiler = kfp.compiler.Compiler()
-    compiler.compile(pipeline_func=pharmcat_pipeline, package_path="pharmcat_pipeline_v4_docker.yaml")
-    print("Pipeline compiled to pharmcat_pipeline_v4_docker.yaml")
+    compiler.compile(pipeline_func=pharmcat_pipeline, package_path="pharmcat_pipeline_.yaml")
