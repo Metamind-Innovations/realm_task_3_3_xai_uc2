@@ -181,7 +181,8 @@ def run_shap_analysis(
         project_files: Input[Model],
         input_data: Input[Dataset],
         pharmcat_results: Input[Dataset],
-        shap_results: Output[Dataset]
+        shap_results: Output[Dataset],
+        sensitivity: float = 0.7
 ):
     import subprocess
     from pathlib import Path
@@ -209,14 +210,17 @@ def run_shap_analysis(
     if not phenotypes_csv.is_file(): raise Exception(
         f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run SHAP analysis.")
     print(f"Found phenotypes file: {phenotypes_csv}")
+
     command = [
         "python", str(shap_script),
         "--phenotypes_file", str(phenotypes_csv),
         "--output_dir", str(shap_results_path),
         "--input_dir", str(input_data_path),
-        "--convert_vcf"  # Added this argument to convert VCF to CSV
+        "--convert_vcf",  # Convert VCF to CSV
+        "--sensitivity", str(sensitivity)  # Add sensitivity parameter for fuzzy logic
     ]
-    print(f"\nRunning SHAP analysis command: {' '.join(command)}")
+
+    print(f"\nRunning SHAP analysis command with sensitivity={sensitivity}: {' '.join(command)}")
     try:
         subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
         print("SHAP analysis script executed successfully.")
@@ -335,7 +339,8 @@ def run_fairness_analysis(
 )
 def pharmcat_pipeline(
         github_repo_url: str,
-        branch: str = "main"
+        branch: str = "main",
+        sensitivity: float = 0.7  # Add sensitivity parameter with default value of 0.7
 ):
     download_task = download_pharmcat_project(
         github_repo_url=github_repo_url,
@@ -355,7 +360,8 @@ def pharmcat_pipeline(
     shap_task = run_shap_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"],
-        pharmcat_results=pharmcat_task.outputs["result_folder"]
+        pharmcat_results=pharmcat_task.outputs["result_folder"],
+        sensitivity=sensitivity
     )
     shap_task.set_caching_options(False)
     shap_task.set_cpu_request("2")
