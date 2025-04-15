@@ -167,7 +167,7 @@ def run_pharmcat_analysis_docker(
 ):
     command_str = f"mkdir -p '{result_folder.path}' && python3 -u /scripts/pharmcat_folder_processor.py --input_folder '{input_folder.path}' --result_folder '{result_folder.path}'"
     return dsl.ContainerSpec(
-        image="<docker_image_link>",  # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
+        image="docker.io/gigakos/pharmcat-realm:latest",  # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
         command=["sh", "-c"],
         args=[command_str]
     )
@@ -182,7 +182,8 @@ def run_shap_analysis(
         input_data: Input[Dataset],
         pharmcat_results: Input[Dataset],
         shap_results: Output[Dataset],
-        sensitivity: float = 0.7
+        sensitivity: float = 0.7,
+        max_samples: int = -1
 ):
     import subprocess
     from pathlib import Path
@@ -211,17 +212,19 @@ def run_shap_analysis(
         f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run SHAP analysis.")
     print(f"Found phenotypes file: {phenotypes_csv}")
 
-    # Added sensitivity parameter to the command
+    # Added max_samples parameter to the command
     command = [
         "python", str(shap_script),
         "--phenotypes_file", str(phenotypes_csv),
         "--output_dir", str(shap_results_path),
         "--input_dir", str(input_data_path),
         "--convert_vcf",  # Convert VCF to CSV
-        "--sensitivity", str(sensitivity)  # Add sensitivity parameter for fuzzy logic
+        "--sensitivity", str(sensitivity),  # Add sensitivity parameter for fuzzy logic
+        "--max_samples", str(max_samples)  # Add max_samples parameter
     ]
 
-    print(f"\nRunning explanability analysis command with sensitivity={sensitivity}: {' '.join(command)}")
+    print(
+        f"\nRunning explanability analysis command with sensitivity={sensitivity}, max_samples={max_samples}: {' '.join(command)}")
     try:
         subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
         print("Explanability analysis script executed successfully.")
@@ -341,7 +344,8 @@ def run_fairness_analysis(
 def pharmcat_pipeline(
         github_repo_url: str,
         branch: str = "main",
-        sensitivity: float = 0.7  # Add sensitivity parameter with default value of 0.7
+        sensitivity: float = 0.7,  # Control the blend between explanation methods
+        max_samples: int = -1  # -1 means analyze all samples
 ):
     download_task = download_pharmcat_project(
         github_repo_url=github_repo_url,
@@ -362,7 +366,8 @@ def pharmcat_pipeline(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"],
-        sensitivity=sensitivity
+        sensitivity=sensitivity,
+        max_samples=max_samples
     )
     shap_task.set_caching_options(False)
     shap_task.set_cpu_request("2")
