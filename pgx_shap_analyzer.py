@@ -351,64 +351,247 @@ def run_perturbation_analysis(X, Y, phenotype_mappings, max_samples=100):
     return results
 
 
+def run_lime_analysis(X, Y, phenotype_mappings, max_samples=100):
+    """
+    Run a LIME-based feature importance analysis.
+    Creates local surrogate models to explain individual predictions.
+    """
+    from sklearn.linear_model import Ridge
+
+    rng = np.random.Generator(np.random.PCG64(seed=42))
+    results = {}
+
+    # Limit samples for performance
+    if len(X) > max_samples:
+        sample_indices = rng.choice(len(X), max_samples, replace=False)
+        X_sample = X.iloc[sample_indices]
+        y_sample = Y.iloc[sample_indices]
+    else:
+        X_sample = X
+        y_sample = Y
+
+    feature_names = X_sample.columns.tolist()
+
+    for gene in TARGET_GENES:
+        if gene not in y_sample.columns:
+            print(f"Skipping {gene} - not found in phenotypes data")
+            continue
+
+        print(f"Running LIME analysis for {gene}...")
+
+        # Create reverse mapping (numeric to phenotype)
+        num_to_phenotype = {v: k for k, v in phenotype_mappings[gene].items()}
+
+        # Calculate importance matrix (samples x features)
+        importance_matrix = np.zeros((len(X_sample), len(feature_names)))
+
+        # LIME hyperparameters
+        num_perturbed_samples = 1000  # Number of perturbed samples to generate
+        kernel_width = 0.75  # Width of exponential kernel for proximity weighting
+
+        # For each sample
+        for sample_idx, (idx, original_sample) in enumerate(X_sample.iterrows()):
+            # Create perturbed samples around the original sample
+            perturbed_samples = []
+            for _ in range(num_perturbed_samples):
+                # Create a random perturbation by flipping binary features with some probability
+                perturbed = original_sample.copy()
+                # Randomly select features to flip (each with 30% probability)
+                flip_features = rng.choice([False, True], size=len(feature_names), p=[0.7, 0.3])
+                for i, flip in enumerate(flip_features):
+                    if flip:
+                        perturbed[feature_names[i]] = 1 - perturbed[feature_names[i]]  # Flip 0->1 or 1->0
+                perturbed_samples.append(perturbed)
+
+            # Convert to DataFrame
+            perturbed_df = pd.DataFrame(perturbed_samples, columns=feature_names)
+
+            # Create target values for perturbed samples based on similarity
+            # We'll use a heuristic based on feature relevance to gene
+            target_values = []
+            for _, perturbed in perturbed_df.iterrows():
+                # Calculate similarity between original and perturbed
+                distance = np.sum(original_sample != perturbed)
+                # Convert to similarity (kernel)
+                similarity = np.exp(-(distance ** 2) / kernel_width)
+
+                # Create a synthetic target value based on gene-specific features
+                gene_features = [f for f in feature_names if f.startswith(f"{gene}_")]
+
+                # Calculate weighted similarity for gene features vs. other features
+                gene_diff = sum(original_sample[f] != perturbed[f] for f in gene_features) if gene_features else 0
+                other_diff = distance - gene_diff
+
+                # More weight to gene-specific differences
+                weighted_distance = (gene_diff * 3) + other_diff
+                similarity = np.exp(-(weighted_distance ** 2) / kernel_width)
+
+                target_values.append(similarity)
+
+            # Convert to numpy array
+            perturbed_np = perturbed_df.to_numpy()
+            target_np = np.array(target_values)
+
+            # Fit a simple linear model to approximate local behavior
+            model = Ridge(alpha=1.0)
+            model.fit(perturbed_np, target_np, sample_weight=target_np)
+
+            # Use coefficients as feature importances
+            feature_importances = np.abs(model.coef_)
+
+            # Normalize to [0, 1]
+            if np.max(feature_importances) > 0:
+                feature_importances = feature_importances / np.max(feature_importances)
+
+            # Store in importance matrix
+            importance_matrix[sample_idx] = feature_importances
+
+        # Store results in the same format as SHAP for compatibility
+        results[gene] = {
+            "shap_values": importance_matrix,
+            "feature_names": feature_names,
+            "sample_indices": X_sample.index.tolist(),
+            "predictions": y_sample[gene].tolist(),
+            "num_to_phenotype": num_to_phenotype
+        }
+
+    return results
+
+
 def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
     """
-    Apply fuzzy logic to decide between SHAP and perturbation analysis.
+    Apply fuzzy logic to decide between SHAP, LIME, and perturbation analysis.
 
     sensitivity: float between 0 and 1
-        0 means pure perturbation analysis
-        1 means pure SHAP analysis
-        Values in between blend the two methods
+        0: Primarily perturbation analysis (fastest, most approximate)
+        0.5: Balanced blend of all methods
+        1: Primarily SHAP analysis (slowest, most accurate)
     """
     # Clamp sensitivity to [0, 1]
     sensitivity = max(0.0, min(1.0, sensitivity))
 
-    if sensitivity == 0:
-        print("Using perturbation-based analysis only (sensitivity = 0)...")
+    # Based on sensitivity, determine the weights for each method
+    if sensitivity <= 0.33:
+        # At low sensitivity, favor perturbation (faster)
+        print(f"Using method blend with low sensitivity ({sensitivity:.2f}):")
+        perturbation_weight = 0.7 - (sensitivity * 0.9)  # Decreases from 0.7 to 0.4
+        lime_weight = 0.3 + (sensitivity * 0.3)  # Increases from 0.3 to 0.4
+        shap_weight = sensitivity * 0.6  # Increases from 0 to 0.2
+        print(f"  - Perturbation: {perturbation_weight:.1%}")
+        print(f"  - LIME: {lime_weight:.1%}")
+        print(f"  - SHAP: {shap_weight:.1%}")
+    elif sensitivity <= 0.67:
+        # At medium sensitivity, balanced approach
+        print(f"Using method blend with medium sensitivity ({sensitivity:.2f}):")
+        mid_point = (sensitivity - 0.33) / 0.34  # Normalize to [0,1] within this range
+        perturbation_weight = 0.4 - (mid_point * 0.2)  # Decreases from 0.4 to 0.2
+        lime_weight = 0.4  # Stays constant at 0.4
+        shap_weight = 0.2 + (mid_point * 0.2)  # Increases from 0.2 to 0.4
+        print(f"  - Perturbation: {perturbation_weight:.1%}")
+        print(f"  - LIME: {lime_weight:.1%}")
+        print(f"  - SHAP: {shap_weight:.1%}")
+    else:
+        # At high sensitivity, favor SHAP (more accurate)
+        print(f"Using method blend with high sensitivity ({sensitivity:.2f}):")
+        high_point = (sensitivity - 0.67) / 0.33  # Normalize to [0,1] within this range
+        perturbation_weight = 0.2 - (high_point * 0.2)  # Decreases from 0.2 to 0
+        lime_weight = 0.4 - (high_point * 0.1)  # Decreases from 0.4 to 0.3
+        shap_weight = 0.4 + (high_point * 0.3)  # Increases from 0.4 to 0.7
+        print(f"  - Perturbation: {perturbation_weight:.1%}")
+        print(f"  - LIME: {lime_weight:.1%}")
+        print(f"  - SHAP: {shap_weight:.1%}")
+
+    # Early return for edge cases (performance optimization)
+    if perturbation_weight >= 0.99:
+        print("Using perturbation-based analysis only...")
         return run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
 
-    if sensitivity == 1:
-        print("Using SHAP analysis only (sensitivity = 1)...")
+    if lime_weight >= 0.99:
+        print("Using LIME-based analysis only...")
+        return run_lime_analysis(X, Y, phenotype_mappings, max_samples)
+
+    if shap_weight >= 0.99:
+        print("Using SHAP analysis only...")
         return run_shap_analysis(X, Y, phenotype_mappings, max_samples)
 
-    # For values in between, blend the two methods
-    print(f"Using fuzzy blend of SHAP ({sensitivity:.1%}) and perturbation ({(1 - sensitivity):.1%})...")
-
-    # Get the results from both methods
-    shap_results = run_shap_analysis(X, Y, phenotype_mappings, max_samples)
-    pert_results = run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
-
-    # Create blended results dictionary
+    # For weighted blends, compute all methods needed
+    results = {}
     blended_results = {}
 
-    # Blend results for each gene
-    for gene in TARGET_GENES:
-        if gene in shap_results and gene in pert_results:
-            # Get values from both methods
-            shap_values = np.array(shap_results[gene]["shap_values"])
-            pert_values = np.array(pert_results[gene]["shap_values"])
+    # Only compute methods with non-zero weights
+    if perturbation_weight > 0:
+        perturbation_results = run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
+        results['perturbation'] = perturbation_results
 
-            # Normalize the values to ensure fair blending
+    if lime_weight > 0:
+        lime_results = run_lime_analysis(X, Y, phenotype_mappings, max_samples)
+        results['lime'] = lime_results
+
+    if shap_weight > 0:
+        shap_results = run_shap_analysis(X, Y, phenotype_mappings, max_samples)
+        results['shap'] = shap_results
+
+    # Blend the results for each gene
+    for gene in TARGET_GENES:
+        # Skip genes not analyzed by any method
+        if not any(method in results and gene in results[method] for method in results):
+            continue
+
+        # Get available methods for this gene
+        gene_methods = {method: results[method][gene] for method in results if gene in results[method]}
+
+        if not gene_methods:
+            continue
+
+        # Use the first method's metadata (they should all be the same)
+        first_method = next(iter(gene_methods.values()))
+        feature_names = first_method["feature_names"]
+        sample_indices = first_method["sample_indices"]
+        predictions = first_method["predictions"]
+        num_to_phenotype = first_method["num_to_phenotype"]
+
+        # Initialize blended values matrix
+        blended_values = np.zeros((len(sample_indices), len(feature_names)))
+
+        # Add each method's contribution with appropriate weights
+        total_weight = 0
+
+        if 'perturbation' in gene_methods and perturbation_weight > 0:
+            perturbation_values = np.array(gene_methods['perturbation']["shap_values"])
+            # Normalize
+            if np.max(np.abs(perturbation_values)) > 0:
+                perturbation_values = perturbation_values / np.max(np.abs(perturbation_values))
+            blended_values += perturbation_weight * perturbation_values
+            total_weight += perturbation_weight
+
+        if 'lime' in gene_methods and lime_weight > 0:
+            lime_values = np.array(gene_methods['lime']["shap_values"])
+            # Normalize
+            if np.max(np.abs(lime_values)) > 0:
+                lime_values = lime_values / np.max(np.abs(lime_values))
+            blended_values += lime_weight * lime_values
+            total_weight += lime_weight
+
+        if 'shap' in gene_methods and shap_weight > 0:
+            shap_values = np.array(gene_methods['shap']["shap_values"])
+            # Normalize
             if np.max(np.abs(shap_values)) > 0:
                 shap_values = shap_values / np.max(np.abs(shap_values))
-            if np.max(np.abs(pert_values)) > 0:
-                pert_values = pert_values / np.max(np.abs(pert_values))
+            blended_values += shap_weight * shap_values
+            total_weight += shap_weight
 
-            # Blend with sensitivity weights
-            blended_values = sensitivity * shap_values + (1 - sensitivity) * pert_values
+        # Normalize by total weight
+        if total_weight > 0:
+            blended_values = blended_values / total_weight
 
-            # Create blended result using structure from SHAP results
-            blended_results[gene] = {
-                "shap_values": blended_values,
-                "feature_names": shap_results[gene]["feature_names"],
-                "sample_indices": shap_results[gene]["sample_indices"],
-                "predictions": shap_results[gene]["predictions"],
-                "num_to_phenotype": shap_results[gene]["num_to_phenotype"]
-            }
-        elif gene in shap_results:
-            blended_results[gene] = shap_results[gene]
-        elif gene in pert_results:
-            blended_results[gene] = pert_results[gene]
+        # Create blended result
+        blended_results[gene] = {
+            "shap_values": blended_values,
+            "feature_names": feature_names,
+            "sample_indices": sample_indices,
+            "predictions": predictions,
+            "num_to_phenotype": num_to_phenotype
+        }
 
     return blended_results
 
@@ -607,9 +790,9 @@ def main():
     parser.add_argument('--phenotypes_file', required=True, help='Path to phenotypes.csv file')
     parser.add_argument('--output_dir', default='pgx_shap_results', help='Output directory for results')
     parser.add_argument('--convert_vcf', action='store_true', help='Convert VCF files to CSV format')
-    parser.add_argument('--max_samples', type=int, default=100, help='Maximum number of samples for SHAP analysis')
+    parser.add_argument('--max_samples', type=int, default=100, help='Maximum number of samples for analysis')
     parser.add_argument('--sensitivity', type=float, default=0.5,
-                        help='Sensitivity value (0-1) for fuzzy logic between SHAP and perturbation-based explanation')
+                        help='Sensitivity value (0-1) for fuzzy logic between explanation methods')
     args = parser.parse_args()
 
     # Ensure sensitivity is in the valid range [0, 1]

@@ -175,7 +175,7 @@ def run_pharmcat_analysis_docker(
 
 @kfp.dsl.component(
     base_image="python:3.10-slim",
-    packages_to_install=["matplotlib", "numpy", "pandas", "seaborn", "shap"]
+    packages_to_install=["matplotlib", "numpy", "pandas", "scikit-learn", "seaborn", "shap"]
 )
 def run_shap_analysis(
         project_files: Input[Model],
@@ -211,6 +211,7 @@ def run_shap_analysis(
         f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run SHAP analysis.")
     print(f"Found phenotypes file: {phenotypes_csv}")
 
+    # Added sensitivity parameter to the command
     command = [
         "python", str(shap_script),
         "--phenotypes_file", str(phenotypes_csv),
@@ -220,28 +221,28 @@ def run_shap_analysis(
         "--sensitivity", str(sensitivity)  # Add sensitivity parameter for fuzzy logic
     ]
 
-    print(f"\nRunning SHAP analysis command with sensitivity={sensitivity}: {' '.join(command)}")
+    print(f"\nRunning explanability analysis command with sensitivity={sensitivity}: {' '.join(command)}")
     try:
         subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
-        print("SHAP analysis script executed successfully.")
+        print("Explanability analysis script executed successfully.")
     except subprocess.CalledProcessError as e:
-        print("\n--- Error running SHAP analysis script ---")
+        print("\n--- Error running explanability analysis script ---")
         print(f"Exit Code: {e.returncode}")
         print(f"stdout:\n{e.stdout}")
         print(f"stderr:\n{e.stderr}")
-        raise Exception("SHAP analysis script failed.")
+        raise Exception("Explanability analysis script failed.")
     except Exception as e:
-        print(f"\nAn unexpected error occurred during SHAP analysis: {e}")
+        print(f"\nAn unexpected error occurred during explanability analysis: {e}")
         raise
-    print("\nVerifying SHAP analysis output...")
+    print("\nVerifying explanability analysis output...")
     expected_json = shap_results_path / "pgx_shap_results.json"
     expected_preprocessed_dir = shap_results_path / "preprocessed"
     if not expected_json.is_file():
-        raise Exception("SHAP analysis failed: pgx_shap_results.json not found")
+        raise Exception("Explanability analysis failed: pgx_shap_results.json not found")
     else:
         print(f"Found expected output file: {expected_json}")
     if not expected_preprocessed_dir.is_dir():
-        print(f"Warning: Expected 'preprocessed' directory not found in SHAP results: {expected_preprocessed_dir}")
+        print(f"Warning: Expected 'preprocessed' directory not found in results: {expected_preprocessed_dir}")
     else:
         print(f"Found expected output directory: {expected_preprocessed_dir}")
         preprocessed_files = list(expected_preprocessed_dir.glob("*.csv"))
@@ -249,7 +250,7 @@ def run_shap_analysis(
             print(f"  Warning: 'preprocessed' directory exists but contains no CSV files.")
         else:
             print(f"  Found {len(preprocessed_files)} CSV files in 'preprocessed'.")
-    print("\nSHAP analysis component completed successfully.")
+    print("\nExplanability analysis component completed successfully.")
 
 
 @kfp.dsl.component(
