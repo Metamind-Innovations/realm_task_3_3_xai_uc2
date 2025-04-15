@@ -1,4 +1,5 @@
 import kfp
+from kfp import dsl
 from kfp.dsl import Dataset, Input, Output, Model
 
 
@@ -159,104 +160,17 @@ def download_pharmcat_project(
     print("Download component finished.")
 
 
-@kfp.dsl.component(
-    base_image="docker.io/gigakos/pharmcat-realm:latest"
-)
+@dsl.container_component
 def run_pharmcat_analysis_docker(
-        input_data: Input[Dataset],
-        pharmcat_results: Output[Dataset]
+        input_folder: dsl.Input[dsl.Dataset],
+        result_folder: dsl.Output[dsl.Dataset]
 ):
-    import subprocess
-    import time
-    import os
-    from pathlib import Path
-
-    input_data_path = Path(input_data.path)
-    pharmcat_results_path = Path(pharmcat_results.path)
-
-    print(f"PharmCAT Docker Component Started.")
-    print(f"Input data path (mounted by KFP): {input_data_path}")
-    print(f"Output results path (mounted by KFP): {pharmcat_results_path}")
-
-    pharmcat_results_path.mkdir(parents=True, exist_ok=True)
-    print(f"Ensured output directory exists: {pharmcat_results_path}")
-
-    command = [
-        "pharmcat-realm",
-        "--input_folder", str(input_data_path),
-        "--result_folder", str(pharmcat_results_path)
-    ]
-
-    print(f"\nExecuting command inside the PharmCAT Docker image:")
-    print(f"  Command: {' '.join(command)}")
-
-    start_time = time.time()
-    try:
-        process = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8'
-        )
-        end_time = time.time()
-        print(f"\n--- PharmCAT Docker stdout ---")
-        print(process.stdout)
-        print(f"--- End PharmCAT Docker stdout ---")
-        if process.stderr:
-            print(f"\n--- PharmCAT Docker stderr ---")
-            print(process.stderr)
-            print(f"--- End PharmCAT Docker stderr ---")
-        print(f"\nPharmCAT Docker image executed successfully in {end_time - start_time:.2f} seconds.")
-
-    except subprocess.CalledProcessError as e:
-        end_time = time.time()
-        print(f"\n--- Error running PharmCAT Docker image command (Exited with code {e.returncode}) ---")
-        print(f"Execution time: {end_time - start_time:.2f} seconds")
-        print(f"Command: {' '.join(e.args)}")
-        print(f"\nstdout:\n{e.stdout}")
-        print(f"\nstderr:\n{e.stderr}")
-        print("--------------------------------------------------------------------")
-        raise Exception(f"PharmCAT Docker image execution failed with exit code {e.returncode}.")
-    except FileNotFoundError:
-        print(f"\nFatal Error: Command '{command[0]}' not found in the Docker image's PATH ({os.getenv('PATH')}).")
-        print(
-            "Ensure the Docker image `docker.io/gigakos/pharmcat-realm:latest` has the correct entrypoint or command available.")
-        raise Exception(f"Entrypoint/Command '{command[0]}' not found in PharmCAT Docker image.")
-    except Exception as e:
-        end_time = time.time()
-        print(f"\nAn unexpected error occurred after {end_time - start_time:.2f} seconds: {e}")
-        raise
-
-    print("\nVerifying PharmCAT Docker output...")
-    phenotypes_csv = pharmcat_results_path / "phenotypes.csv"
-    json_files = list(pharmcat_results_path.glob("*.phenotype.json"))
-
-    output_ok = True
-    if not phenotypes_csv.is_file():
-        print(f"Error: Expected phenotypes.csv not found in results directory: {phenotypes_csv}")
-        output_ok = False
-    else:
-        print(f"Found phenotypes.csv (size: {phenotypes_csv.stat().st_size} bytes).")
-        if phenotypes_csv.stat().st_size < 20:
-            print("Warning: phenotypes.csv seems empty or header-only.")
-
-    if not json_files:
-        print(f"Warning: No '*.phenotype.json' files found in results directory: {pharmcat_results_path}")
-    else:
-        print(f"Found {len(json_files)} '*.phenotype.json' files.")
-
-    print("\nFinal contents of results directory:")
-    try:
-        for item in sorted(pharmcat_results_path.iterdir()):
-            print(f"  - {item.name} ({item.stat().st_size} bytes)")
-    except Exception as list_err:
-        print(f"  Could not list directory contents: {list_err}")
-
-    if not output_ok:
-        raise Exception("PharmCAT Docker run finished, but expected phenotypes.csv was not found.")
-
-    print("\nPharmCAT Docker component completed successfully.")
+    command_str = f"mkdir -p '{result_folder.path}' && python3 -u /scripts/pharmcat_folder_processor.py --input_folder '{input_folder.path}' --result_folder '{result_folder.path}'"
+    return dsl.ContainerSpec(
+        image="docker.io/gigakos/pharmcat-realm:latest",
+        command=["sh", "-c"],
+        args=[command_str]
+    )
 
 
 @kfp.dsl.component(
@@ -300,6 +214,7 @@ def run_shap_analysis(
         "--phenotypes_file", str(phenotypes_csv),
         "--output_dir", str(shap_results_path),
         "--input_dir", str(input_data_path),
+        "--convert_vcf"  # Added this argument to convert VCF to CSV
     ]
     print(f"\nRunning SHAP analysis command: {' '.join(command)}")
     try:
@@ -429,7 +344,7 @@ def pharmcat_pipeline(
     download_task.set_caching_options(False)
 
     pharmcat_task = run_pharmcat_analysis_docker(
-        input_data=download_task.outputs["input_data"]
+        input_folder=download_task.outputs["input_data"]
     )
     pharmcat_task.set_caching_options(False)
     pharmcat_task.set_cpu_request("2")
@@ -440,7 +355,7 @@ def pharmcat_pipeline(
     shap_task = run_shap_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"],
-        pharmcat_results=pharmcat_task.outputs["pharmcat_results"]
+        pharmcat_results=pharmcat_task.outputs["result_folder"]
     )
     shap_task.set_caching_options(False)
     shap_task.set_cpu_request("2")
@@ -451,7 +366,7 @@ def pharmcat_pipeline(
     fairness_task = run_fairness_analysis(
         project_files=download_task.outputs["project_files"],
         demographic_data=download_task.outputs["demographic_data"],
-        pharmcat_results=pharmcat_task.outputs["pharmcat_results"]
+        pharmcat_results=pharmcat_task.outputs["result_folder"]
     )
     fairness_task.set_caching_options(False)
     fairness_task.set_cpu_request("2")
