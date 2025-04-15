@@ -260,7 +260,14 @@ This will execute the pharmcat pipeline for all samples placed in the `data` fol
 |  HG00436  |   IM   |   NM    |   NM   |   PM   |  NM  |   NF    |      NM       |
 
 6. Place the `result` folder in the root of the current project.
-7.
+7. Execute the `pgx_shap_analyzer.py` script to explain PharmCAT predictions: `python pgx_shap_analyzer.py --input_dir <path_to_vcf_files> --phenotypes_file result/phenotypes.csv --output_dir pgx_shap_results --convert_vcf`. This will analyze the genetic variants that contribute to each phenotype prediction and generate a `pgx_shap_results.json` file with detailed explanations.
+8. Execute the `pgx_fairness_analyzer.py` script: `python pgx_fairness_analyzer.py --demographic_file Demographics/pgx_cohort.csv --phenotypes_file result/phenotypes.csv --output_dir pgx_fairness_results`. This will generate individual fairness reports for each sample and an overall fairness report, highlighting any potential demographic bias in the predictions.
+9. Examine the output files:
+   1. `pgx_shap_results/pgx_shap_results.json`: Contains feature importance and sample-specific explanations
+   2. `pgx_shap_results/pgx_shap_summary.txt`: Provides a human-readable summary of the SHAP analysis
+   3. `pgx_fairness_results/overall_fairness_report.json`: Summarizes potential bias across demographic groups
+   4. Individual sample reports in the respective output directories
+10. _Alternative Pipeline Execution: Use the Kubeflow pipeline to automate the entire workflow: `python kubeflow_component/pgx_pipeline_component.py`. This will generate a `pharmcat_pipeline_.yaml` file that can be uploaded to a Kubeflow environment for execution. See more details in the [Kubeflow Pipeline Component](#kubeflow-pipeline-component) section. 
 
 ## SHAP Analyzer JSON Output
 
@@ -306,6 +313,16 @@ Features in the output follow these patterns:
 - `GENE_rsID_gt_GENOTYPE`: Genotype (e.g., "CYP2C19_rs3758581_gt_1/1" for homozygous)
 - `GENE_posNUMBER`: Position-based feature (e.g., "CYP3A5_pos99652770")
 
+## Kubeflow Pipeline Component
+
+The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating the pharmacogenomics analysis workflow. This pipeline orchestrates the following components:
+
+1. **Download Component**: Downloads project files, input data, and demographic data from a specified GitHub repository.
+2. **PharmCAT Analysis**: Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions.
+3. **SHAP Analysis**: Applies SHAP (SHapley Additive exPlanations) analysis to explain the PharmCAT predictions.
+4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
+
+You need to specify the docker image containing the PharmCAT analysis code at **line 170** in the `pgx_pipeline_component.py` file. The pipeline can be compiled and deployed to a Kubeflow environment by first executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
 
 ## 📜 License & Usage
 
