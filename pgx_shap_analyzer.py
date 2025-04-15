@@ -134,42 +134,58 @@ def load_csv_data(csv_files):
 
 def extract_features(variant_data):
     features = defaultdict(dict)
+    initial_sample_count = variant_data['Sample'].nunique()
+    print(f"Initial number of samples in variant data: {initial_sample_count}")
+
+    # Track samples with target gene variants
+    samples_with_target_genes = set()
+    genes_found = set()
 
     for _, row in variant_data.iterrows():
         sample = row['Sample']
         gene = row.get('Gene', None)
-        if not gene or gene not in TARGET_GENES:
-            continue
 
-        # Extract variant ID and genotype
-        variant_id = row.get('ID', f"{row['CHROM']}_{row['POS']}")
-        if variant_id == '.' or pd.isna(variant_id):
-            variant_id = f"{row['CHROM']}_{row['POS']}"
+        if gene and gene in TARGET_GENES:
+            samples_with_target_genes.add(sample)
+            genes_found.add(gene)
 
-        # Try to find GT column
-        gt_col = None
-        for col in row.index:
-            if '_GT' in col:
-                gt_col = col
-                break
+            # Extract variant ID and genotype
+            variant_id = row.get('ID', f"{row['CHROM']}_{row['POS']}")
+            if variant_id == '.' or pd.isna(variant_id):
+                variant_id = f"{row['CHROM']}_{row['POS']}"
 
-        genotype = row[gt_col] if gt_col else "0/0"
+            # Try to find GT column
+            gt_col = None
+            for col in row.index:
+                if '_GT' in col:
+                    gt_col = col
+                    break
 
-        # Add basic features
-        feature_name = f"{gene}_{variant_id}"
-        features[sample][feature_name] = 1  # This variant IS present in this sample
+            genotype = row[gt_col] if gt_col else "0/0"
 
-        # Add genotype-specific features
-        if genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
-            features[sample][f"{feature_name}_het"] = 1
-        elif genotype in ['1/1', '2/2']:  # Homozygous alt
-            features[sample][f"{feature_name}_hom"] = 1
+            # Add basic features
+            feature_name = f"{gene}_{variant_id}"
+            features[sample][feature_name] = 1  # This variant IS present in this sample
+
+            # Add genotype-specific features
+            if genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
+                features[sample][f"{feature_name}_het"] = 1
+            elif genotype in ['1/1', '2/2']:  # Homozygous alt
+                features[sample][f"{feature_name}_hom"] = 1
+
+    print(f"Found {len(samples_with_target_genes)} samples with variants in target genes")
+    print(f"Target genes found in data: {', '.join(sorted(genes_found))}")
+
+    if not samples_with_target_genes:
+        raise ValueError("No samples with variants in target genes found. Please check your input data.")
 
     # Convert to dataframe
     samples = list(features.keys())
     all_features = set()
     for sample_features in features.values():
         all_features.update(sample_features.keys())
+
+    print(f"Extracted {len(all_features)} features across {len(samples)} samples")
 
     X = pd.DataFrame(0, index=samples, columns=sorted(all_features))
     for sample, sample_features in features.items():
@@ -179,25 +195,46 @@ def extract_features(variant_data):
     return X
 
 
-def prepare_targets(phenotypes_file, feature_samples):
+def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_COL):
     phenotypes_df = pd.read_csv(phenotypes_file)
+    print(f"Phenotypes file contains {len(phenotypes_df)} samples")
 
     # Ensure Sample ID column exists
     if SAMPLE_ID_COL not in phenotypes_df.columns:
-        raise ValueError(f"No '{SAMPLE_ID_COL}' column found in {phenotypes_file}")
+        # Try to find an alternative column that might be the sample ID
+        potential_id_cols = [col for col in phenotypes_df.columns if "sample" in col.lower() or "id" in col.lower()]
+        if potential_id_cols:
+            alternative_col = potential_id_cols[0]
+            print(f"Warning: '{SAMPLE_ID_COL}' not found, using '{alternative_col}' instead")
+            SAMPLE_ID_COL = alternative_col
+        else:
+            raise ValueError(f"No '{SAMPLE_ID_COL}' column found in {phenotypes_file}")
 
     # Filter to samples in feature matrix
     phenotypes_df = phenotypes_df[phenotypes_df[SAMPLE_ID_COL].isin(feature_samples)]
+    print(f"After filtering to match feature samples: {len(phenotypes_df)} samples remain")
 
     # Set index to Sample ID
     phenotypes_df = phenotypes_df.set_index(SAMPLE_ID_COL)
+
+    # Check which target genes are present in the phenotypes
+    genes_in_phenotypes = [gene for gene in TARGET_GENES if gene in phenotypes_df.columns]
+    print(f"Target genes found in phenotypes: {', '.join(genes_in_phenotypes)}")
+
+    if not genes_in_phenotypes:
+        raise ValueError(
+            f"None of the target genes {TARGET_GENES} found in phenotypes file. Available columns: {phenotypes_df.columns.tolist()}")
 
     # Create phenotype mapping on-the-fly
     Y = pd.DataFrame(index=phenotypes_df.index)
     phenotype_mappings = {}
 
-    for gene in TARGET_GENES:
-        if gene in phenotypes_df.columns:
+    for gene in genes_in_phenotypes:
+        # Count available phenotypes for this gene
+        non_na_count = phenotypes_df[gene].notna().sum()
+        print(f"  - {gene}: {non_na_count} samples with phenotypes")
+
+        if non_na_count > 0:
             # Get unique phenotypes and create mapping
             unique_phenotypes = sorted(phenotypes_df[gene].dropna().unique())
             phenotype_to_num = {phenotype: i for i, phenotype in enumerate(unique_phenotypes)}
@@ -790,7 +827,8 @@ def main():
     parser.add_argument('--phenotypes_file', required=True, help='Path to phenotypes.csv file')
     parser.add_argument('--output_dir', default='pgx_shap_results', help='Output directory for results')
     parser.add_argument('--convert_vcf', action='store_true', help='Convert VCF files to CSV format')
-    parser.add_argument('--max_samples', type=int, default=100, help='Maximum number of samples for analysis')
+    parser.add_argument('--max_samples', type=int, default=100,
+                        help='Maximum number of samples to analyze (use -1 for all samples)')
     parser.add_argument('--sensitivity', type=float, default=0.5,
                         help='Sensitivity value (0-1) for fuzzy logic between explanation methods')
     args = parser.parse_args()
@@ -805,17 +843,16 @@ def main():
     if args.convert_vcf:
         _, csv_dir = preprocess_input_data(args.input_dir, os.path.join(args.output_dir, "preprocessed"))
         input_files = glob.glob(os.path.join(csv_dir, CSV_EXT))
-        print(f"Converted VCF files to CSV format in {csv_dir}")
+        print(f"Converted VCF files to CSV format in {csv_dir} ({len(input_files)} files)")
     else:
         input_files = find_csv_files(args.input_dir)
         if not input_files:
             raise ValueError(f"No CSV files found in {args.input_dir}. Use --convert_vcf to convert VCF files.")
-
-    print(f"Found {len(input_files)} input files")
+        print(f"Found {len(input_files)} CSV files")
 
     print("Loading CSV data...")
     variant_data = load_csv_data(input_files)
-    print(f"Loaded data for {variant_data['Sample'].nunique()} samples")
+    print(f"Loaded data for {variant_data['Sample'].nunique()} unique samples")
 
     print("Extracting features...")
     X = extract_features(variant_data)
@@ -827,12 +864,28 @@ def main():
 
     # Ensure same samples in X and Y
     common_samples = X.index.intersection(Y.index)
+    print(f"Found {len(common_samples)} samples common to both feature matrix and phenotype data")
+
+    if len(common_samples) == 0:
+        print("WARNING: No matching samples found between variant data and phenotype data!")
+        print(f"Feature matrix sample IDs (first 5): {list(X.index)[:5]}")
+        print(f"Phenotype data sample IDs (first 5): {list(Y.index)[:5]}")
+        raise ValueError("No overlapping samples between variant data and phenotype data")
+
     X = X.loc[common_samples]
     Y = Y.loc[common_samples]
-    print(f"Using {len(common_samples)} samples common to both matrices")
+
+    # Apply max_samples limit if specified
+    max_samples = args.max_samples
+    if max_samples <= 0:  # -1 means use all samples
+        max_samples = len(common_samples)
+        print(f"Using all {max_samples} available samples")
+    else:
+        max_samples = min(max_samples, len(common_samples))
+        print(f"Using a maximum of {max_samples} samples (out of {len(common_samples)} available)")
 
     print(f"Running analysis with sensitivity={args.sensitivity}...")
-    results = apply_fuzzy_logic(args.sensitivity, X, Y, phenotype_mappings, max_samples=args.max_samples)
+    results = apply_fuzzy_logic(args.sensitivity, X, Y, phenotype_mappings, max_samples=max_samples)
 
     print("Preparing results...")
     json_output_file = os.path.join(args.output_dir, "pgx_shap_results.json")
@@ -844,6 +897,8 @@ def main():
     print(f"Analysis complete! Results saved to {args.output_dir}")
     print(f"JSON results: {json_output_file}")
     print(f"Summary report: {summary_file}")
+    print(f"Total samples analyzed: {len(common_samples)}")
+    print(f"Maximum samples used for explanation methods: {max_samples}")
 
 
 if __name__ == "__main__":
