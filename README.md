@@ -323,6 +323,7 @@ The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating 
 4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
 
 You need to specify the docker image containing the PharmCAT analysis code at **line 170** in the `pgx_pipeline_component.py` file. The pipeline can be compiled and deployed to a Kubeflow environment by first executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
+The pipeline structure can be seen in the below image: ![Kubeflow Pipeline](kubeflow_pipeline.png)
 
 ## 📜 License & Usage
 
