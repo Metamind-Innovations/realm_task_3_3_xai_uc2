@@ -260,7 +260,7 @@ This will execute the pharmcat pipeline for all samples placed in the `data` fol
 |  HG00436  |   IM   |   NM    |   NM   |   PM   |  NM  |   NF    |      NM       |
 
 6. Place the `result` folder in the root of the current project.
-7. Execute the `pgx_shap_analyzer.py` script to explain PharmCAT predictions: `python pgx_shap_analyzer.py --input_dir <path_to_vcf_files> --phenotypes_file result/phenotypes.csv --output_dir pgx_shap_results --convert_vcf`. This will analyze the genetic variants that contribute to each phenotype prediction and generate a `pgx_shap_results.json` file with detailed explanations.
+7. Execute the `pgx_analyzer.py` script to explain PharmCAT predictions: `python pgx_analyzer.py --input_dir <path_to_vcf_files> --phenotypes_file result/phenotypes.csv --output_dir pgx_shap_results --convert_vcf`. This will analyze the genetic variants that contribute to each phenotype prediction and generate a `pgx_shap_results.json` file with detailed explanations.
 8. Execute the `pgx_fairness_analyzer.py` script: `python pgx_fairness_analyzer.py --demographic_file Demographics/pgx_cohort.csv --phenotypes_file result/phenotypes.csv --output_dir pgx_fairness_results`. This will generate individual fairness reports for each sample and an overall fairness report, highlighting any potential demographic bias in the predictions.
 9. Examine the output files:
    1. `pgx_shap_results/pgx_shap_results.json`: Contains feature importance and sample-specific explanations
