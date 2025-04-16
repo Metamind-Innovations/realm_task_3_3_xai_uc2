@@ -1,19 +1,17 @@
-**TODO**
-
 ## Pharmacogenomics (PGx) Analysis with Explainability
 
-This project provides explainable AI tools for analyzing pharmacogenomic phenotype predictions made by PharmCAT. 
-It uses SHAP analysis to explain which genetic variants contribute to phenotype predictions and includes a fairness analyzer to detect potential biases across demographic groups.
+This project provides explainable AI tools for analyzing pharmacogenomic phenotype predictions made by PharmCAT.
+It uses multiple explanation methods (SHAP, LIME, and perturbation-based analysis) with a fuzzy logic system to explain which genetic variants contribute to phenotype predictions and includes a fairness analyzer to detect potential biases across demographic groups.
 
 ## Project Overview
 
-PharmCAT is a software tool that analyzes genetic data (VCF files) to predict pharmacogenomic phenotypes that influence drug metabolism and response. 
-This project adds an explainability layer to understand why PharmCAT makes specific predictions and to identify potential biases in those predictions.
+PharmCAT is a software tool that analyzes genetic data (VCF files) to predict pharmacogenomic phenotypes that influence drug metabolism and response.
+This project adds an explainability layer to understand why PharmCAT makes specific predictions and to identify potential biases in those predictions
 
 Key components:
 1. Converting VCF genetic data to analyzable csv format.
-2. Providing explainability for PharmCAT predictions using SHAP analysis
-3. Analyzing potential demographic bias and fairness issues in predictions
+2. Providing explainability for PharmCAT predictions using a blend of SHAP, LIME, and perturbation-based analysis.
+3. Analyzing potential demographic bias and fairness issues in predictions.
 
 The project focuses on the key pharmacogenes: **CYP2B6, CYP2C9, CYP2C19, CYP3A5, SLCO1B1, TPMT, and DPYD.**
 
@@ -40,11 +38,18 @@ This will execute the pharmcat pipeline for all samples placed in the `data` fol
 |  HG00436  |   IM   |   NM    |   NM   |   PM   |  NM  |   NF    |      NM       |
 
 6. Place the `result` folder in the root of the current project.
-7. Execute the `pgx_analyzer.py` script to explain PharmCAT predictions: `python pgx_analyzer.py --input_dir <path_to_vcf_files> --phenotypes_file result/phenotypes.csv --output_dir pgx_shap_results --convert_vcf`. This will analyze the genetic variants that contribute to each phenotype prediction and generate a `pgx_shap_results.json` file with detailed explanations.
+7. Execute the `pgx_analyzer.py` script to explain PharmCAT predictions: `python pgx_analyzer.py --input_dir <path_to_vcf_files> --phenotypes_file result/phenotypes.csv --output_dir pgx_results --convert_vcf --sensitivity 0.7`. 
+   1. The `sensitivity` parameter (0.0-1.0) controls the blend between explanation methods:
+      1. Lower values (near 0.0): Faster but less precise perturbation-based analysis
+      2. Medium values (around 0.5): Balanced approach using LIME and other methods
+      3. Higher values (near 1.0): More precise but computationally intensive SHAP analysis
+   2. The `max_samples` parameter limits how many samples receive detailed analysis (-1 for all samples)
+
+    This will generate a `pgx_results.json` file with detailed explanations and a `pgx_summary.txt` file with a human-readable summary.
 8. Execute the `pgx_fairness_analyzer.py` script: `python pgx_fairness_analyzer.py --demographic_file Demographics/pgx_cohort.csv --phenotypes_file result/phenotypes.csv --output_dir pgx_fairness_results`. This will generate individual fairness reports for each sample and an overall fairness report, highlighting any potential demographic bias in the predictions.
 9. Examine the output files:
-   1. `pgx_shap_results/pgx_shap_results.json`: Contains feature importance and sample-specific explanations
-   2. `pgx_shap_results/pgx_shap_summary.txt`: Provides a human-readable summary of the SHAP analysis
+   1. `pgx_results/pgx_results.json`: Contains feature importance and sample-specific explanations
+   2. `pgx_results/pgx_summary.txt`: Provides a human-readable summary of the SHAP analysis
    3. `pgx_fairness_results/overall_fairness_report.json`: Summarizes potential bias across demographic groups
    4. Individual sample reports in the respective output directories
 10. _Alternative Pipeline Execution: Use the Kubeflow pipeline to automate the entire workflow: `python kubeflow_component/pgx_pipeline_component.py`. This will generate a `pharmcat_pipeline_.yaml` file that can be uploaded to a Kubeflow environment for execution. See more details in the [Kubeflow Pipeline Component](#kubeflow-pipeline-component) section. 
