@@ -7,7 +7,7 @@ from kfp.dsl import Dataset, Input, Output, Model
     base_image="python:3.10-slim",
     packages_to_install=["requests"]
 )
-def download_pharmcat_project(
+def download_project(
         github_repo_url: str,
         project_files: Output[Model],
         input_data: Output[Dataset],
@@ -161,13 +161,13 @@ def download_pharmcat_project(
 
 
 @dsl.container_component
-def run_pharmcat_analysis_docker(
+def pharmcat_analysis_docker(
         input_folder: dsl.Input[dsl.Dataset],
         result_folder: dsl.Output[dsl.Dataset]
 ):
     command_str = f"mkdir -p '{result_folder.path}' && python3 -u /scripts/pharmcat_folder_processor.py --input_folder '{input_folder.path}' --result_folder '{result_folder.path}'"
     return dsl.ContainerSpec(
-        image="docker.io/gigakos/pharmcat-realm:latest",  # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
+        image="<your_docker_pharmcat_image>",  # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
         command=["sh", "-c"],
         args=[command_str]
     )
@@ -177,7 +177,7 @@ def run_pharmcat_analysis_docker(
     base_image="python:3.10-slim",
     packages_to_install=["matplotlib", "numpy", "pandas", "scikit-learn", "seaborn", "shap"]
 )
-def run_analysis(
+def explainability_analysis(
         project_files: Input[Model],
         input_data: Input[Dataset],
         pharmcat_results: Input[Dataset],
@@ -260,7 +260,7 @@ def run_analysis(
     base_image="python:3.10-slim",
     packages_to_install=["numpy", "pandas", "scipy"]
 )
-def run_fairness_analysis(
+def fairness_analysis(
         project_files: Input[Model],
         demographic_data: Input[Dataset],
         pharmcat_results: Input[Dataset],
@@ -347,13 +347,13 @@ def pharmcat_pipeline(
         sensitivity: float = 0.7,  # Control the blend between explanation methods
         max_samples: int = -1  # -1 means analyze all samples
 ):
-    download_task = download_pharmcat_project(
+    download_task = download_project(
         github_repo_url=github_repo_url,
         branch=branch
     )
     download_task.set_caching_options(False)
 
-    pharmcat_task = run_pharmcat_analysis_docker(
+    pharmcat_task = pharmcat_analysis_docker(
         input_folder=download_task.outputs["input_data"]
     )
     pharmcat_task.set_caching_options(False)
@@ -362,7 +362,7 @@ def pharmcat_pipeline(
     pharmcat_task.set_memory_request("4G")
     pharmcat_task.set_memory_limit("8G")
 
-    analysis_task = run_analysis(
+    analysis_task = explainability_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"],
@@ -375,7 +375,7 @@ def pharmcat_pipeline(
     analysis_task.set_memory_request("4G")
     analysis_task.set_memory_limit("8G")
 
-    fairness_task = run_fairness_analysis(
+    fairness_task = fairness_analysis(
         project_files=download_task.outputs["project_files"],
         demographic_data=download_task.outputs["demographic_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"]
