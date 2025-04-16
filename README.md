@@ -325,6 +325,14 @@ The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating 
 You need to specify the docker image containing the PharmCAT analysis code at **line 170** in the `pgx_pipeline_component.py` file. The pipeline can be compiled and deployed to a Kubeflow environment by first executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
 The pipeline structure can be seen in the below image: ![Kubeflow Pipeline](kubeflow_pipeline.png)
 
+## Accessing the Generated Artifacts
+
+The pipeline stores generated artifacts in MinIO object storage within the Kubeflow namespace. To access these artifacts:
+1. Set up port forwarding to the MinIO service by running `kubectl port-forward -n kubeflow svc/minio-service 9000:9000` in a terminal window
+2. Access the MinIO web interface at `http://localhost:9000`
+3. Log in with the default credentials: **username:** `minio`, **password:** `minio123`
+4. Navigate to the `mlpipeline` bucket, where you'll find the respective folders according to the automatically assigned uuid of the pipeline. (An example location could be: `http://localhost:9000/minio/mlpipeline/v2/artifacts/pharmcat-pgx-analysis-pipeline-dockerized/f3346d91-8fae-475f-ab83-f78df99264bc/`)
+
 ## 📜 License & Usage
 
 All rights reserved by MetaMinds Innovations.
