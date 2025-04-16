@@ -59,7 +59,7 @@ def download_pharmcat_project(
     items_to_copy = {
         "project_files": [
             "pgx_fairness_analyzer.py",
-            "pgx_shap_analyzer.py",
+            "pgx_analyzer.py",
             "requirements.txt"
         ],
         "input_data": ["data"],
@@ -177,11 +177,11 @@ def run_pharmcat_analysis_docker(
     base_image="python:3.10-slim",
     packages_to_install=["matplotlib", "numpy", "pandas", "scikit-learn", "seaborn", "shap"]
 )
-def run_shap_analysis(
+def run_analysis(
         project_files: Input[Model],
         input_data: Input[Dataset],
         pharmcat_results: Input[Dataset],
-        shap_results: Output[Dataset],
+        results: Output[Dataset],
         sensitivity: float = 0.7,
         max_samples: int = -1
 ):
@@ -190,12 +190,12 @@ def run_shap_analysis(
     project_files_path = Path(project_files.path)
     input_data_path = Path(input_data.path)
     pharmcat_results_path = Path(pharmcat_results.path)
-    shap_results_path = Path(shap_results.path)
-    shap_results_path.mkdir(parents=True, exist_ok=True)
-    print(f"Ensured SHAP results directory exists: {shap_results_path}")
-    shap_script = project_files_path / "pgx_shap_analyzer.py"
-    if not shap_script.is_file(): raise Exception(f"SHAP analyzer script not found at {shap_script}")
-    print(f"Found SHAP script: {shap_script}")
+    results_path = Path(results.path)
+    results_path.mkdir(parents=True, exist_ok=True)
+    print(f"Ensured results directory exists: {results_path}")
+    analyzer_script = project_files_path / "pgx_analyzer.py"
+    if not analyzer_script.is_file(): raise Exception(f"Analyzer script not found at {analyzer_script}")
+    print(f"Found analyzer script: {analyzer_script}")
     req_file = project_files_path / "requirements.txt"
     if req_file.is_file():
         print(f"Installing requirements from {req_file}...")
@@ -204,19 +204,19 @@ def run_shap_analysis(
             print("Requirements installed.")
         except subprocess.CalledProcessError as e:
             print(f"Error installing requirements: {e.stderr}")
-            raise Exception("Failed to install requirements for SHAP analysis.")
+            raise Exception("Failed to install requirements for analysis.")
     else:
         print("No requirements.txt found in project_files, skipping pip install.")
     phenotypes_csv = pharmcat_results_path / "phenotypes.csv"
     if not phenotypes_csv.is_file(): raise Exception(
-        f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run SHAP analysis.")
+        f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run analysis.")
     print(f"Found phenotypes file: {phenotypes_csv}")
 
     # Added max_samples parameter to the command
     command = [
-        "python", str(shap_script),
+        "python", str(analyzer_script),
         "--phenotypes_file", str(phenotypes_csv),
-        "--output_dir", str(shap_results_path),
+        "--output_dir", str(results_path),
         "--input_dir", str(input_data_path),
         "--convert_vcf",  # Convert VCF to CSV
         "--sensitivity", str(sensitivity),  # Add sensitivity parameter for fuzzy logic
@@ -238,10 +238,10 @@ def run_shap_analysis(
         print(f"\nAn unexpected error occurred during explanability analysis: {e}")
         raise
     print("\nVerifying explanability analysis output...")
-    expected_json = shap_results_path / "pgx_shap_results.json"
-    expected_preprocessed_dir = shap_results_path / "preprocessed"
+    expected_json = results_path / "pgx_results.json"
+    expected_preprocessed_dir = results_path / "preprocessed"
     if not expected_json.is_file():
-        raise Exception("Explanability analysis failed: pgx_shap_results.json not found")
+        raise Exception("Explanability analysis failed: pgx_results.json not found")
     else:
         print(f"Found expected output file: {expected_json}")
     if not expected_preprocessed_dir.is_dir():
@@ -362,18 +362,18 @@ def pharmcat_pipeline(
     pharmcat_task.set_memory_request("4G")
     pharmcat_task.set_memory_limit("8G")
 
-    shap_task = run_shap_analysis(
+    analysis_task = run_analysis(
         project_files=download_task.outputs["project_files"],
         input_data=download_task.outputs["input_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"],
         sensitivity=sensitivity,
         max_samples=max_samples
     )
-    shap_task.set_caching_options(False)
-    shap_task.set_cpu_request("2")
-    shap_task.set_cpu_limit("4")
-    shap_task.set_memory_request("4G")
-    shap_task.set_memory_limit("8G")
+    analysis_task.set_caching_options(False)
+    analysis_task.set_cpu_request("2")
+    analysis_task.set_cpu_limit("4")
+    analysis_task.set_memory_request("4G")
+    analysis_task.set_memory_limit("8G")
 
     fairness_task = run_fairness_analysis(
         project_files=download_task.outputs["project_files"],

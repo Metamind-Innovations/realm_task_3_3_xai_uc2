@@ -958,7 +958,7 @@ def create_enriched_results(shap_results, X, output_file):
 
 
 def generate_summary_report(json_results, output_dir):
-    summary_file = os.path.join(output_dir, "pgx_shap_summary.txt")
+    summary_file = os.path.join(output_dir, "pgx_summary.txt")
 
     # Calculate the total number of samples across all phenotype distributions
     total_distributions = {}
@@ -981,7 +981,7 @@ def generate_summary_report(json_results, output_dir):
     detailed_samples = len(explanation_sample_ids)
 
     with open(summary_file, 'w') as f:
-        f.write("# PharmCAT SHAP Analysis Summary Report\n\n")
+        f.write("# PharmCAT Analysis Summary Report\n\n")
 
         # Overall stats
         f.write("## Overview\n")
@@ -1020,7 +1020,7 @@ def generate_summary_report(json_results, output_dir):
 
             f.write("Top contributions:\n")
             for j, contrib in enumerate(sample['top_contributions'][:5]):
-                f.write(f"{j + 1}. {contrib['feature']} - SHAP value: {contrib['shap_value']:.4f}\n")
+                f.write(f"{j + 1}. {contrib['feature']} - importance value: {contrib['shap_value']:.4f}\n")
 
     print(f"Summary report saved to {summary_file}")
     return summary_file
@@ -1041,10 +1041,10 @@ def find_csv_files(input_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='PharmCAT SHAP-based explainer')
+    parser = argparse.ArgumentParser(description='PharmCAT explainer')
     parser.add_argument('--input_dir', required=True, help='Directory containing VCF or CSV files')
     parser.add_argument('--phenotypes_file', required=True, help='Path to phenotypes.csv file')
-    parser.add_argument('--output_dir', default='pgx_shap_results', help='Output directory for results')
+    parser.add_argument('--output_dir', default='pgx_results', help='Output directory for results')
     parser.add_argument('--convert_vcf', action='store_true', help='Convert VCF files to CSV format')
     parser.add_argument('--max_samples', type=int, default=100,
                         help='Maximum number of samples for detailed SHAP/LIME analysis (use -1 for all samples)')
@@ -1149,7 +1149,7 @@ def main():
                 print(f"Gene {gene}: Found {sum(phenotype_counts.values())} samples with phenotypes")
 
     print("Preparing results...")
-    json_output_file = os.path.join(args.output_dir, "pgx_shap_results.json")
+    json_output_file = os.path.join(args.output_dir, "pgx_results.json")
     json_results = create_enriched_results(results, X, json_output_file)
 
     print("Generating summary report...")
