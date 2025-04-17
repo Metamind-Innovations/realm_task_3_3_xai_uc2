@@ -687,6 +687,30 @@ def run_lime_analysis(X, Y, phenotype_mappings, max_samples=100):
 
 
 def generate_counterfactual_examples(X, sample_id, feature_names, top_k=10):
+    """
+    Generate counterfactual examples by removing genetic variants one at a time.
+
+    This function creates modified versions of a sample where individual genetic variants
+    are "turned off" to observe what impact each variant has on the phenotype prediction.
+    Unlike traditional ML models, PharmCAT uses rule-based decision-making, so this
+    approach helps identify which specific variants trigger particular rules.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Feature matrix where rows are samples and columns are genetic variants
+    sample_id : str
+        ID of the sample to generate counterfactuals for
+    feature_names : list
+        List of feature names (genetic variants)
+    top_k : int, default=10
+        Maximum number of counterfactuals to generate, focusing on the top features
+
+    Returns
+    -------
+    dict
+        Dictionary mapping feature names to counterfactual samples
+    """
     if sample_id not in X.index:
         raise ValueError(f"Sample ID {sample_id} not found in the feature matrix")
 
@@ -705,7 +729,27 @@ def generate_counterfactual_examples(X, sample_id, feature_names, top_k=10):
     return counterfactuals
 
 
-def analyze_counterfactuals(counterfactuals, original_sample, gene_predictions, num_to_phenotype):
+def analyze_counterfactuals(counterfactuals, original_sample):
+    """
+    Analyze counterfactual examples to identify the impact of removing specific variants.
+
+    This function examines which genetic variants differ between the original sample
+    and each counterfactual. Since PharmCAT is a rule-based system rather than a statistical
+    model, this approach helps identify which variants potentially trigger specific rules
+    in PharmCAT's knowledge base.
+
+    Parameters
+    ----------
+    counterfactuals : dict
+        Dictionary of counterfactual samples from generate_counterfactual_examples
+    original_sample : pandas.Series
+        Original sample with all variants present
+
+    Returns
+    -------
+    list
+        List of dictionaries containing impact information for each variant
+    """
     impacts = []
 
     for feature, counterfactual in counterfactuals.items():
@@ -730,7 +774,38 @@ def analyze_counterfactuals(counterfactuals, original_sample, gene_predictions, 
     return impacts
 
 
-def extract_decision_rules(X, Y, gene, phenotype_mappings):
+def extract_decision_rules(X, Y, gene, gene_phenotype_mapping):
+    """
+    Extract decision rules by training a surrogate decision tree model.
+
+    While PharmCAT uses predefined expert-curated rules, this function creates a surrogate
+    decision tree model that approximates those rules based on the observed input-output
+    relationships. Decision trees are particularly well-suited for approximating rule-based
+    systems since they naturally create if-then-else structures.
+
+    The Gini impurity measure (shown as 'gini' in visualizations) quantifies how mixed the
+    phenotype classes are at each node:
+    - Gini = 0: Perfect purity (all samples have same phenotype)
+    - Gini = 1: Maximum impurity (equal distribution across phenotypes)
+    - Higher Gini values at decision points often indicate variants that strongly
+      differentiate between phenotype groups
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Feature matrix where rows are samples and columns are genetic variants
+    Y : pandas.DataFrame
+        Target matrix with phenotype encodings
+    gene : str
+        Gene name to extract rules for
+    gene_phenotype_mapping : dict
+        Mapping from phenotype names to numeric encodings for this specific gene
+
+    Returns
+    -------
+    sklearn.tree.DecisionTreeClassifier or None
+        Trained decision tree model if successful, None otherwise
+    """
     from sklearn.tree import DecisionTreeClassifier
 
     if gene not in Y.columns:
@@ -813,6 +888,38 @@ def generate_rule_based_explanations(tree_model, feature_names, phenotype_mappin
 
 
 def run_counterfactual_analysis(X, Y, phenotype_mappings, output_dir, top_k=10):
+    """
+    Run counterfactual analysis to understand how individual variants affect predictions.
+
+    Counterfactual analysis is particularly appropriate for PharmCAT because:
+    1. It mimics how rule-based systems are typically debugged and understood
+    2. It provides clear, deterministic explanations of "if this variant were absent,
+       then the phenotype would change to X"
+    3. It's aligned with how pharmacogenomics literature often describes variant effects
+       (presence/absence of specific alleles)
+
+    This approach was chosen over traditional black-box explainability methods because
+    PharmCAT's decision-making is fundamentally based on matching variants to known
+    allele definitions, not on statistical patterns or weighted features.
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Feature matrix with variants
+    Y : pandas.DataFrame
+        Target matrix with phenotype encodings
+    phenotype_mappings : dict
+        Mapping from phenotype names to numeric encodings
+    output_dir : str
+        Directory to save the analysis results
+    top_k : int, default=10
+        Maximum number of top features to consider per sample
+
+    Returns
+    -------
+    dict
+        Counterfactual analysis results organized by gene and sample
+    """
     counterfactual_results = {}
 
     for gene in TARGET_GENES:
@@ -832,7 +939,7 @@ def run_counterfactual_analysis(X, Y, phenotype_mappings, output_dir, top_k=10):
             phenotype = num_to_phenotype.get(phenotype_num, "Unknown")
 
             counterfactuals = generate_counterfactual_examples(X, sample_id, X.columns, top_k)
-            impacts = analyze_counterfactuals(counterfactuals, X.loc[sample_id], Y.loc[sample_id], num_to_phenotype)
+            impacts = analyze_counterfactuals(counterfactuals, X.loc[sample_id])
 
             sample_result = {
                 'sample_id': str(sample_id),
@@ -852,6 +959,37 @@ def run_counterfactual_analysis(X, Y, phenotype_mappings, output_dir, top_k=10):
 
 
 def run_rule_extraction(X, Y, phenotype_mappings, output_dir):
+    """
+    Extract and visualize decision rules that approximate PharmCAT's phenotype predictions.
+
+    Rule extraction was chosen as an explainability method because:
+    1. PharmCAT itself is a rule-based system, so rules are a natural fit for explaining it
+    2. Decision trees provide an intuitive visual representation of hierarchical rules
+    3. The extracted rules can be compared to PharmCAT's actual decision logic for validation
+
+    The decision trees show:
+    - Gini impurity values (0-1): Higher values indicate more diverse phenotype distributions,
+      with 0 meaning perfect purity (all samples have same phenotype) and 1 meaning maximum
+      impurity (equal distribution across all phenotypes)
+    - Weighted samples: Number of samples at each decision point
+    - Class distribution: The phenotype distribution at each node
+
+    Parameters
+    ----------
+    X : pandas.DataFrame
+        Feature matrix with variants
+    Y : pandas.DataFrame
+        Target matrix with phenotype encodings
+    phenotype_mappings : dict
+        Mapping from phenotype names to numeric encodings
+    output_dir : str
+        Directory to save the visualization and rule files
+
+    Returns
+    -------
+    dict
+        Rule extraction results organized by gene
+    """
     rule_results = {}
 
     for gene in TARGET_GENES:
@@ -860,15 +998,16 @@ def run_rule_extraction(X, Y, phenotype_mappings, output_dir):
 
         print(f"Extracting decision rules for {gene}...")
 
-        tree_model = extract_decision_rules(X, Y, gene, phenotype_mappings[gene])
+        gene_phenotype_mapping = phenotype_mappings[gene]
+        tree_model = extract_decision_rules(X, Y, gene, gene_phenotype_mapping)
 
         if tree_model is None:
             continue
 
         tree_output_file = os.path.join(output_dir, f"{gene}_decision_tree.png")
-        visualize_decision_tree(tree_model, X.columns.tolist(), phenotype_mappings[gene], tree_output_file)
+        visualize_decision_tree(tree_model, X.columns.tolist(), gene_phenotype_mapping, tree_output_file)
 
-        rules = generate_rule_based_explanations(tree_model, X.columns.tolist(), phenotype_mappings[gene])
+        rules = generate_rule_based_explanations(tree_model, X.columns.tolist(), gene_phenotype_mapping)
 
         rule_results[gene] = {
             'tree_visualization': os.path.basename(tree_output_file),
