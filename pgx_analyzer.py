@@ -247,6 +247,38 @@ def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_CO
 
 
 def create_prediction_function(y_sample, gene):
+    """
+    Creates a prediction function for use with SHAP KernelExplainer.
+
+    This function generates a callable that mimics the behavior of the original model by sampling
+    from known phenotype predictions. When called with feature data similar in size to the training
+    set, it returns the actual phenotype values. For other input shapes, it randomly samples from
+    the known phenotype distribution to maintain the same phenotype frequencies.
+
+    Parameters
+    ----------
+    y_sample : pandas.DataFrame
+        DataFrame containing phenotype predictions, with samples as rows and genes as columns.
+        The values are numeric encodings of phenotypes (e.g., PM=0, IM=1, NM=2, etc.)
+
+    gene : str
+        Name of the gene to create predictions for (e.g., "CYP2B6", "CYP2C19", etc.)
+
+    Returns
+    -------
+    function
+        A callable prediction function that takes a feature matrix X and returns phenotype
+        predictions. The function maintains phenotype distributions by either:
+        - Returning actual phenotypes when input shape matches y_sample
+        - Sampling from phenotype distribution when input shape differs
+
+    Notes
+    -----
+    The returned function is specifically designed for use with SHAP KernelExplainer, which needs
+    a prediction function that can handle arbitrary input shapes during the analysis process.
+    The function preserves the original phenotype distribution through random sampling when
+    necessary.
+    """
     def predict_gene(x, y_sample=y_sample):
         if len(x) == len(y_sample):
             return y_sample[gene].values
