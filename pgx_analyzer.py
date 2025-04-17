@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import shap
 
-# Target genes for analysis
 TARGET_GENES = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
 
 SAMPLE_ID_COL = 'Sample ID'
@@ -23,6 +22,20 @@ class VCFParser:
         self.header = None
 
     def parse_vcf(self, vcf_file):
+        """
+        Parse a VCF file and convert it to a pandas DataFrame.
+
+        Parameters
+        ----------
+        vcf_file : str
+            Path to the VCF file to parse.
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            DataFrame containing the parsed VCF data with columns for CHROM, POS, ID, REF, ALT, etc.
+            Returns None if parsing fails.
+        """
         try:
             with open(vcf_file, 'r') as f:
                 lines = f.readlines()
@@ -80,6 +93,21 @@ class VCFParser:
         return ''
 
     def vcf_to_csv(self, vcf_file, output_csv=None):
+        """
+        Convert a VCF file to CSV format.
+
+        Parameters
+        ----------
+        vcf_file : str
+            Path to the VCF file to convert.
+        output_csv : str, optional
+            Path to the output CSV file. If None, the output path is derived from the input VCF file.
+
+        Returns
+        -------
+        str or None
+            Path to the created CSV file, or None if conversion fails.
+        """
         if output_csv is None:
             output_csv = os.path.splitext(vcf_file)[0] + CSV_SUFFIX
 
@@ -91,6 +119,24 @@ class VCFParser:
 
 
 def preprocess_input_data(input_dir, output_dir=None):
+    """
+    Preprocess VCF files in the input directory by converting them to CSV format.
+
+    Parameters
+    ----------
+    input_dir : str
+        Directory containing VCF files to process.
+    output_dir : str, optional
+        Directory to save the processed CSV files. If None, creates a 'preprocessed'
+        subdirectory in the input directory.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - Dictionary mapping sample IDs to their corresponding CSV file paths
+        - The output directory path
+    """
     if output_dir is None:
         output_dir = os.path.join(input_dir, "preprocessed")
 
@@ -133,11 +179,24 @@ def load_csv_data(csv_files):
 
 
 def extract_features(variant_data):
+    """
+    Extract genetic features from variant data for pharmacogenomic analysis.
+
+    Parameters
+    ----------
+    variant_data : pandas.DataFrame
+        DataFrame containing genetic variant data with columns for Sample, Gene, CHROM, POS, etc.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Feature matrix where each row represents a sample and columns represent genetic variants.
+        Values are binary (0 or 1) indicating the presence or absence of a variant.
+    """
     features = defaultdict(dict)
     initial_sample_count = variant_data['Sample'].nunique()
     print(f"Initial number of samples in variant data: {initial_sample_count}")
 
-    # Track samples with target gene variants
     samples_with_target_genes = set()
     genes_found = set()
 
@@ -149,12 +208,10 @@ def extract_features(variant_data):
             samples_with_target_genes.add(sample)
             genes_found.add(gene)
 
-            # Extract variant ID and genotype
             variant_id = row.get('ID', f"{row['CHROM']}_{row['POS']}")
             if variant_id == '.' or pd.isna(variant_id):
                 variant_id = f"{row['CHROM']}_{row['POS']}"
 
-            # Try to find GT column
             gt_col = None
             for col in row.index:
                 if '_GT' in col:
@@ -163,14 +220,12 @@ def extract_features(variant_data):
 
             genotype = row[gt_col] if gt_col else "0/0"
 
-            # Add basic features
             feature_name = f"{gene}_{variant_id}"
-            features[sample][feature_name] = 1  # This variant IS present in this sample
+            features[sample][feature_name] = 1
 
-            # Add genotype-specific features
-            if genotype in ['0/1', '1/0', '0/2', '2/0']:  # Heterozygous
+            if genotype in ['0/1', '1/0', '0/2', '2/0']:
                 features[sample][f"{feature_name}_het"] = 1
-            elif genotype in ['1/1', '2/2']:  # Homozygous alt
+            elif genotype in ['1/1', '2/2']:
                 features[sample][f"{feature_name}_hom"] = 1
 
     print(f"Found {len(samples_with_target_genes)} samples with variants in target genes")
@@ -179,7 +234,6 @@ def extract_features(variant_data):
     if not samples_with_target_genes:
         raise ValueError("No samples with variants in target genes found. Please check your input data.")
 
-    # Convert to dataframe
     samples = list(features.keys())
     all_features = set()
     for sample_features in features.values():
@@ -196,12 +250,30 @@ def extract_features(variant_data):
 
 
 def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_COL):
+    """
+    Prepare target variables from phenotype predictions for PGx analysis.
+
+    Parameters
+    ----------
+    phenotypes_file : str
+        Path to the CSV file containing phenotype predictions.
+    feature_samples : list or array-like
+        Sample IDs to filter the phenotypes to match the feature matrix.
+    SAMPLE_ID_COL : str, optional
+        Name of the column containing sample IDs in the phenotypes file.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - Y: DataFrame with encoded phenotypes for each gene
+        - phenotypes_df: Original phenotypes DataFrame filtered to match feature samples
+        - phenotype_mappings: Dictionary mapping phenotype names to numeric encodings for each gene
+    """
     phenotypes_df = pd.read_csv(phenotypes_file)
     print(f"Phenotypes file contains {len(phenotypes_df)} samples")
 
-    # Ensure Sample ID column exists
     if SAMPLE_ID_COL not in phenotypes_df.columns:
-        # Try to find an alternative column that might be the sample ID
         potential_id_cols = [col for col in phenotypes_df.columns if "sample" in col.lower() or "id" in col.lower()]
         if potential_id_cols:
             alternative_col = potential_id_cols[0]
@@ -210,14 +282,11 @@ def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_CO
         else:
             raise ValueError(f"No '{SAMPLE_ID_COL}' column found in {phenotypes_file}")
 
-    # Filter to samples in feature matrix
     phenotypes_df = phenotypes_df[phenotypes_df[SAMPLE_ID_COL].isin(feature_samples)]
     print(f"After filtering to match feature samples: {len(phenotypes_df)} samples remain")
 
-    # Set index to Sample ID
     phenotypes_df = phenotypes_df.set_index(SAMPLE_ID_COL)
 
-    # Check which target genes are present in the phenotypes
     genes_in_phenotypes = [gene for gene in TARGET_GENES if gene in phenotypes_df.columns]
     print(f"Target genes found in phenotypes: {', '.join(genes_in_phenotypes)}")
 
@@ -225,22 +294,18 @@ def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_CO
         raise ValueError(
             f"None of the target genes {TARGET_GENES} found in phenotypes file. Available columns: {phenotypes_df.columns.tolist()}")
 
-    # Create phenotype mapping on-the-fly
     Y = pd.DataFrame(index=phenotypes_df.index)
     phenotype_mappings = {}
 
     for gene in genes_in_phenotypes:
-        # Count available phenotypes for this gene
         non_na_count = phenotypes_df[gene].notna().sum()
         print(f"  - {gene}: {non_na_count} samples with phenotypes")
 
         if non_na_count > 0:
-            # Get unique phenotypes and create mapping
             unique_phenotypes = sorted(phenotypes_df[gene].dropna().unique())
             phenotype_to_num = {phenotype: i for i, phenotype in enumerate(unique_phenotypes)}
             phenotype_mappings[gene] = phenotype_to_num
 
-            # Apply mapping
             Y[gene] = phenotypes_df[gene].map(lambda x: phenotype_to_num.get(x, -1) if pd.notna(x) else -1)
 
     return Y, phenotypes_df, phenotype_mappings
@@ -283,7 +348,6 @@ def create_prediction_function(y_sample, gene):
         if len(x) == len(y_sample):
             return y_sample[gene].values
 
-        # For other shapes, sample from distribution
         rng = np.random.Generator(np.random.PCG64())
         vals = y_sample[gene].values
         return rng.choice(vals, size=len(x))
@@ -341,7 +405,6 @@ def run_shap_analysis(X, Y, phenotype_mappings, max_samples=100):
     rng = np.random.Generator(np.random.PCG64(seed=42))
     results = {}
 
-    # Limit samples for performance
     if len(X) > max_samples:
         sample_indices = rng.choice(len(X), max_samples, replace=False)
         X_sample = X.iloc[sample_indices]
@@ -350,7 +413,6 @@ def run_shap_analysis(X, Y, phenotype_mappings, max_samples=100):
         X_sample = X
         y_sample = Y
 
-    # Create background data
     n_background = min(50, len(X_sample))
     if len(X_sample) > n_background:
         background = shap.sample(X_sample.values, n_background)
@@ -366,13 +428,10 @@ def run_shap_analysis(X, Y, phenotype_mappings, max_samples=100):
 
         print(f"Running SHAP analysis for {gene}...")
 
-        # Create reverse mapping (numeric to phenotype)
         num_to_phenotype = {v: k for k, v in phenotype_mappings[gene].items()}
 
-        # Create prediction function
         predict_func = create_prediction_function(y_sample, gene)
 
-        # Create SHAP explainer
         explainer = shap.KernelExplainer(
             predict_func,
             background,
@@ -380,10 +439,8 @@ def run_shap_analysis(X, Y, phenotype_mappings, max_samples=100):
             feature_names=feature_names
         )
 
-        # Calculate SHAP values
         shap_values = explainer.shap_values(X_sample.values, nsamples=100)
 
-        # Store results
         results[gene] = {
             "shap_values": shap_values,
             "feature_names": feature_names,
@@ -447,7 +504,6 @@ def run_perturbation_analysis(X, Y, phenotype_mappings, max_samples=100):
     rng = np.random.Generator(np.random.PCG64(seed=42))
     results = {}
 
-    # Limit samples for performance
     if len(X) > max_samples:
         sample_indices = rng.choice(len(X), max_samples, replace=False)
         X_sample = X.iloc[sample_indices]
@@ -465,40 +521,28 @@ def run_perturbation_analysis(X, Y, phenotype_mappings, max_samples=100):
 
         print(f"Running perturbation analysis for {gene}...")
 
-        # Create reverse mapping (numeric to phenotype)
         num_to_phenotype = {v: k for k, v in phenotype_mappings[gene].items()}
 
-        # Calculate importance matrix (samples x features)
         importance_matrix = np.zeros((len(X_sample), len(feature_names)))
 
-        # For each feature
         for feat_idx, feature in enumerate(feature_names):
-            # For each sample
             for sample_idx, (idx, sample) in enumerate(X_sample.iterrows()):
-                # Skip if feature is already 0 (no effect to measure)
                 if sample[feature] == 0:
                     continue
 
-                # Determine feature importance based on gene relevance
                 gene_part = feature.split('_')[0]
 
-                # Calculate importance based on gene relationship
                 if gene_part == gene:
-                    # Feature is directly related to the current gene
                     importance = 0.8 * sample[feature]
                 elif gene_part in TARGET_GENES:
-                    # Feature is from another target gene
                     importance = 0.4 * sample[feature]
                 else:
-                    # Feature is less relevant
                     importance = 0.2 * sample[feature]
 
-                # Add a little randomness to simulate real perturbation effects
                 importance *= (1.0 + rng.normal(0, 0.1))
 
                 importance_matrix[sample_idx, feat_idx] = importance
 
-        # Store results in the same format as SHAP for compatibility
         results[gene] = {
             "shap_values": importance_matrix,
             "feature_names": feature_names,
@@ -566,7 +610,6 @@ def run_lime_analysis(X, Y, phenotype_mappings, max_samples=100):
     rng = np.random.Generator(np.random.PCG64(seed=42))
     results = {}
 
-    # Limit samples for performance
     if len(X) > max_samples:
         sample_indices = rng.choice(len(X), max_samples, replace=False)
         X_sample = X.iloc[sample_indices]
@@ -584,74 +627,53 @@ def run_lime_analysis(X, Y, phenotype_mappings, max_samples=100):
 
         print(f"Running LIME analysis for {gene}...")
 
-        # Create reverse mapping (numeric to phenotype)
         num_to_phenotype = {v: k for k, v in phenotype_mappings[gene].items()}
 
-        # Calculate importance matrix (samples x features)
         importance_matrix = np.zeros((len(X_sample), len(feature_names)))
 
-        # LIME hyperparameters
-        num_perturbed_samples = 1000  # Number of perturbed samples to generate
-        kernel_width = 0.75  # Width of exponential kernel for proximity weighting
+        num_perturbed_samples = 1000
+        kernel_width = 0.75
 
-        # For each sample
         for sample_idx, (idx, original_sample) in enumerate(X_sample.iterrows()):
-            # Create perturbed samples around the original sample
             perturbed_samples = []
             for _ in range(num_perturbed_samples):
-                # Create a random perturbation by flipping binary features with some probability
                 perturbed = original_sample.copy()
-                # Randomly select features to flip (each with 30% probability)
                 flip_features = rng.choice([False, True], size=len(feature_names), p=[0.7, 0.3])
                 for i, flip in enumerate(flip_features):
                     if flip:
-                        perturbed[feature_names[i]] = 1 - perturbed[feature_names[i]]  # Flip 0->1 or 1->0
+                        perturbed[feature_names[i]] = 1 - perturbed[feature_names[i]]
                 perturbed_samples.append(perturbed)
 
-            # Convert to DataFrame
             perturbed_df = pd.DataFrame(perturbed_samples, columns=feature_names)
 
-            # Create target values for perturbed samples based on similarity
-            # We'll use a heuristic based on feature relevance to gene
             target_values = []
             for _, perturbed in perturbed_df.iterrows():
-                # Calculate similarity between original and perturbed
                 distance = np.sum(original_sample != perturbed)
-                # Convert to similarity (kernel)
                 similarity = np.exp(-(distance ** 2) / kernel_width)
 
-                # Create a synthetic target value based on gene-specific features
                 gene_features = [f for f in feature_names if f.startswith(f"{gene}_")]
 
-                # Calculate weighted similarity for gene features vs. other features
                 gene_diff = sum(original_sample[f] != perturbed[f] for f in gene_features) if gene_features else 0
                 other_diff = distance - gene_diff
 
-                # More weight to gene-specific differences
                 weighted_distance = (gene_diff * 3) + other_diff
                 similarity = np.exp(-(weighted_distance ** 2) / kernel_width)
 
                 target_values.append(similarity)
 
-            # Convert to numpy array
             perturbed_np = perturbed_df.to_numpy()
             target_np = np.array(target_values)
 
-            # Fit a simple linear model to approximate local behavior
             model = Ridge(alpha=1.0)
             model.fit(perturbed_np, target_np, sample_weight=target_np)
 
-            # Use coefficients as feature importances
             feature_importances = np.abs(model.coef_)
 
-            # Normalize to [0, 1]
             if np.max(feature_importances) > 0:
                 feature_importances = feature_importances / np.max(feature_importances)
 
-            # Store in importance matrix
             importance_matrix[sample_idx] = feature_importances
 
-        # Store results in the same format as SHAP for compatibility
         results[gene] = {
             "shap_values": importance_matrix,
             "feature_names": feature_names,
@@ -735,41 +757,35 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
     Each method's results are normalized before blending to ensure fair contribution
     regardless of the scale of the original importance values.
     """
-    # Clamp sensitivity to [0, 1]
     sensitivity = max(0.0, min(1.0, sensitivity))
 
-    # Based on sensitivity, determine the weights for each method
     if sensitivity <= 0.33:
-        # At low sensitivity, favor perturbation (faster)
         print(f"Using method blend with low sensitivity ({sensitivity:.2f}):")
-        perturbation_weight = 0.7 - (sensitivity * 0.9)  # Decreases from 0.7 to 0.4
-        lime_weight = 0.3 + (sensitivity * 0.3)  # Increases from 0.3 to 0.4
-        shap_weight = sensitivity * 0.6  # Increases from 0 to 0.2
+        perturbation_weight = 0.7 - (sensitivity * 0.9)
+        lime_weight = 0.3 + (sensitivity * 0.3)
+        shap_weight = sensitivity * 0.6
         print(f"  - Perturbation: {perturbation_weight:.1%}")
         print(f"  - LIME: {lime_weight:.1%}")
         print(f"  - SHAP: {shap_weight:.1%}")
     elif sensitivity <= 0.67:
-        # At medium sensitivity, balanced approach
         print(f"Using method blend with medium sensitivity ({sensitivity:.2f}):")
-        mid_point = (sensitivity - 0.33) / 0.34  # Normalize to [0,1] within this range
-        perturbation_weight = 0.4 - (mid_point * 0.2)  # Decreases from 0.4 to 0.2
-        lime_weight = 0.4  # Stays constant at 0.4
-        shap_weight = 0.2 + (mid_point * 0.2)  # Increases from 0.2 to 0.4
+        mid_point = (sensitivity - 0.33) / 0.34
+        perturbation_weight = 0.4 - (mid_point * 0.2)
+        lime_weight = 0.4
+        shap_weight = 0.2 + (mid_point * 0.2)
         print(f"  - Perturbation: {perturbation_weight:.1%}")
         print(f"  - LIME: {lime_weight:.1%}")
         print(f"  - SHAP: {shap_weight:.1%}")
     else:
-        # At high sensitivity, favor SHAP (more accurate)
         print(f"Using method blend with high sensitivity ({sensitivity:.2f}):")
-        high_point = (sensitivity - 0.67) / 0.33  # Normalize to [0,1] within this range
-        perturbation_weight = 0.2 - (high_point * 0.2)  # Decreases from 0.2 to 0
-        lime_weight = 0.4 - (high_point * 0.1)  # Decreases from 0.4 to 0.3
-        shap_weight = 0.4 + (high_point * 0.3)  # Increases from 0.4 to 0.7
+        high_point = (sensitivity - 0.67) / 0.33
+        perturbation_weight = 0.2 - (high_point * 0.2)
+        lime_weight = 0.4 - (high_point * 0.1)
+        shap_weight = 0.4 + (high_point * 0.3)
         print(f"  - Perturbation: {perturbation_weight:.1%}")
         print(f"  - LIME: {lime_weight:.1%}")
         print(f"  - SHAP: {shap_weight:.1%}")
 
-    # Early return for edge cases (performance optimization)
     if perturbation_weight >= 0.99:
         print("Using perturbation-based analysis only...")
         return run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
@@ -782,11 +798,9 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
         print("Using SHAP analysis only...")
         return run_shap_analysis(X, Y, phenotype_mappings, max_samples)
 
-    # For weighted blends, compute all methods needed
     results = {}
     blended_results = {}
 
-    # Only compute methods with non-zero weights
     if perturbation_weight > 0:
         perturbation_results = run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
         results['perturbation'] = perturbation_results
@@ -799,34 +813,27 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
         shap_results = run_shap_analysis(X, Y, phenotype_mappings, max_samples)
         results['shap'] = shap_results
 
-    # Blend the results for each gene
     for gene in TARGET_GENES:
-        # Skip genes not analyzed by any method
         if not any(method in results and gene in results[method] for method in results):
             continue
 
-        # Get available methods for this gene
         gene_methods = {method: results[method][gene] for method in results if gene in results[method]}
 
         if not gene_methods:
             continue
 
-        # Use the first method's metadata (they should all be the same)
         first_method = next(iter(gene_methods.values()))
         feature_names = first_method["feature_names"]
         sample_indices = first_method["sample_indices"]
         predictions = first_method["predictions"]
         num_to_phenotype = first_method["num_to_phenotype"]
 
-        # Initialize blended values matrix
         blended_values = np.zeros((len(sample_indices), len(feature_names)))
 
-        # Add each method's contribution with appropriate weights
         total_weight = 0
 
         if 'perturbation' in gene_methods and perturbation_weight > 0:
             perturbation_values = np.array(gene_methods['perturbation']["shap_values"])
-            # Normalize
             if np.max(np.abs(perturbation_values)) > 0:
                 perturbation_values = perturbation_values / np.max(np.abs(perturbation_values))
             blended_values += perturbation_weight * perturbation_values
@@ -834,7 +841,6 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
 
         if 'lime' in gene_methods and lime_weight > 0:
             lime_values = np.array(gene_methods['lime']["shap_values"])
-            # Normalize
             if np.max(np.abs(lime_values)) > 0:
                 lime_values = lime_values / np.max(np.abs(lime_values))
             blended_values += lime_weight * lime_values
@@ -842,17 +848,14 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
 
         if 'shap' in gene_methods and shap_weight > 0:
             shap_values = np.array(gene_methods['shap']["shap_values"])
-            # Normalize
             if np.max(np.abs(shap_values)) > 0:
                 shap_values = shap_values / np.max(np.abs(shap_values))
             blended_values += shap_weight * shap_values
             total_weight += shap_weight
 
-        # Normalize by total weight
         if total_weight > 0:
             blended_values = blended_values / total_weight
 
-        # Create blended result
         blended_results[gene] = {
             "shap_values": blended_values,
             "feature_names": feature_names,
@@ -878,13 +881,32 @@ def generate_variant_explanation(feature, effect):
 
 
 def create_enriched_results(shap_results, X, output_file):
+    """
+    Create enriched results from SHAP analysis for interpretation and visualization.
+
+    Parameters
+    ----------
+    shap_results : dict
+        Dictionary containing SHAP analysis results for each gene.
+    X : pandas.DataFrame
+        Feature matrix used for the analysis.
+    output_file : str
+        Path to the output JSON file where results will be saved.
+
+    Returns
+    -------
+    dict
+        Dictionary containing enriched results with the following sections:
+        - gene_explanations: Explanations for each gene's phenotype predictions
+        - feature_importance: Global feature importance for each gene
+        - sample_explanations: Sample-specific explanations
+    """
     json_results = {
         "gene_explanations": {},
         "feature_importance": {},
         "sample_explanations": []
     }
 
-    # Process each gene's results
     for gene, result in shap_results.items():
         shap_values = result["shap_values"]
         feature_names = result["feature_names"]
@@ -892,12 +914,10 @@ def create_enriched_results(shap_results, X, output_file):
         predictions = result["predictions"]
         num_to_phenotype = result["num_to_phenotype"]
 
-        # Calculate feature importance
         abs_shap = np.abs(shap_values)
         importance = abs_shap.mean(axis=0)
         top_indices = np.argsort(-importance)[:20]
 
-        # Store feature importance
         gene_importance = {}
         for idx in top_indices:
             if idx < len(feature_names):
@@ -906,7 +926,6 @@ def create_enriched_results(shap_results, X, output_file):
 
         json_results["feature_importance"][gene] = gene_importance
 
-        # Group features by gene
         features_by_gene = defaultdict(list)
         for idx in top_indices:
             if idx < len(feature_names):
@@ -919,13 +938,11 @@ def create_enriched_results(shap_results, X, output_file):
                         "importance": float(importance[idx])
                     })
 
-        # Count phenotype distribution
         phenotype_counts = {}
         for pred in predictions:
             phenotype = num_to_phenotype.get(pred, "Unknown")
             phenotype_counts[phenotype] = phenotype_counts.get(phenotype, 0) + 1
 
-        # Store gene explanation
         json_results["gene_explanations"][gene] = {
             "prediction_distribution": phenotype_counts,
             "top_features_by_gene": {
@@ -933,17 +950,14 @@ def create_enriched_results(shap_results, X, output_file):
             }
         }
 
-        # Add sample explanations (limited to 10)
         for i in range(min(10, len(sample_indices))):
             sample = sample_indices[i]
             pred = predictions[i]
             phenotype = num_to_phenotype.get(pred, "Unknown")
 
-            # Get SHAP values for this sample
             sample_shap = shap_values[i]
             top_contrib_indices = np.argsort(-np.abs(sample_shap))[:10]
 
-            # Collect top contributions
             top_contributions = []
             for j in top_contrib_indices:
                 if j < len(feature_names):
@@ -955,7 +969,6 @@ def create_enriched_results(shap_results, X, output_file):
                     }
                     top_contributions.append(contrib)
 
-            # Generate explanation text
             explanation = f"The {gene} phenotype is {phenotype}. "
 
             if top_contributions:
@@ -972,7 +985,6 @@ def create_enriched_results(shap_results, X, output_file):
 
                 explanation += ", ".join(variant_descriptions)
 
-            # Add sample explanation
             json_results["sample_explanations"].append({
                 "sample_id": str(sample),
                 "gene": gene,
@@ -981,7 +993,6 @@ def create_enriched_results(shap_results, X, output_file):
                 "explanation": explanation
             })
 
-    # Write to file
     with open(output_file, 'w') as f:
         json.dump(json_results, f, indent=2)
 
@@ -992,7 +1003,6 @@ def create_enriched_results(shap_results, X, output_file):
 def generate_summary_report(json_results, output_dir):
     summary_file = os.path.join(output_dir, "pgx_summary.txt")
 
-    # Calculate the total number of samples across all phenotype distributions
     total_distributions = {}
     for gene, gene_data in json_results['gene_explanations'].items():
         for phenotype, count in gene_data['prediction_distribution'].items():
@@ -1001,21 +1011,18 @@ def generate_summary_report(json_results, output_dir):
             else:
                 total_distributions[gene] += count
 
-    # Use the median count as a more reliable estimate of total samples
     gene_sample_counts = list(total_distributions.values())
     if gene_sample_counts:
         total_samples = int(np.median(gene_sample_counts))
     else:
         total_samples = 0
 
-    # Alternatively count unique sample IDs appearing in explanations
     explanation_sample_ids = set([exp['sample_id'] for exp in json_results['sample_explanations']])
     detailed_samples = len(explanation_sample_ids)
 
     with open(summary_file, 'w') as f:
         f.write("# PharmCAT Analysis Summary Report\n\n")
 
-        # Overall stats
         f.write("## Overview\n")
         f.write(f"Analysis performed on {len(json_results['gene_explanations'])} genes\n")
         f.write(f"Total samples processed: {total_samples}\n")
@@ -1035,7 +1042,6 @@ def generate_summary_report(json_results, output_dir):
             for _, features in gene_data['top_features_by_gene'].items():
                 all_features.extend(features)
 
-            # Sort by importance
             all_features.sort(key=lambda x: x['importance'], reverse=True)
 
             for i, feature in enumerate(all_features[:10]):
@@ -1059,12 +1065,10 @@ def generate_summary_report(json_results, output_dir):
 
 
 def find_csv_files(input_dir):
-    # Direct CSV files
     csv_files = glob.glob(os.path.join(input_dir, CSV_EXT))
     if csv_files:
         return csv_files
 
-    # Check preprocessed directory
     preprocessed_dir = os.path.join(input_dir, "preprocessed")
     if os.path.exists(preprocessed_dir):
         return glob.glob(os.path.join(preprocessed_dir, CSV_EXT))
@@ -1084,7 +1088,6 @@ def main():
                         help='Sensitivity value (0-1) for fuzzy logic between explanation methods')
     args = parser.parse_args()
 
-    # Ensure sensitivity is in the valid range [0, 1]
     args.sensitivity = max(0, min(1, args.sensitivity))
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1114,7 +1117,6 @@ def main():
     Y, phenotypes_df, phenotype_mappings = prepare_targets(args.phenotypes_file, X.index)
     print(f"Prepared target matrix with {Y.shape[0]} samples")
 
-    # Ensure same samples in X and Y
     common_samples = X.index.intersection(Y.index)
     print(f"Found {len(common_samples)} samples common to both feature matrix and phenotype data")
 
@@ -1127,10 +1129,8 @@ def main():
     X = X.loc[common_samples]
     Y = Y.loc[common_samples]
 
-    # Apply max_samples limit if specified
-    # This only affects the detailed SHAP/LIME analysis, not the overall statistics
     detailed_max_samples = args.max_samples
-    if detailed_max_samples <= 0:  # -1 means use all samples
+    if detailed_max_samples <= 0:
         detailed_max_samples = len(common_samples)
         print(f"Using all {detailed_max_samples} available samples for detailed analysis")
     else:
@@ -1138,11 +1138,9 @@ def main():
         print(
             f"Using {detailed_max_samples} samples for detailed explanation analysis (out of {len(common_samples)} available)")
 
-    # Save the full dataset for phenotype distribution statistics
     X_full = X.copy()
     Y_full = Y.copy()
 
-    # Select subset for detailed analysis if needed
     if detailed_max_samples < len(common_samples):
         rng = np.random.Generator(np.random.PCG64(seed=42))
         sample_indices = rng.choice(len(common_samples), detailed_max_samples, replace=False)
@@ -1156,28 +1154,22 @@ def main():
         print(f"Using all {len(common_samples)} samples for detailed feature importance analysis")
 
     print(f"Running analysis with sensitivity={args.sensitivity}...")
-    # Use the detailed subset for the computationally intensive analysis
     results = apply_fuzzy_logic(args.sensitivity, X_detailed, Y_detailed, phenotype_mappings,
                                 max_samples=detailed_max_samples)
 
-    # Now augment the results with full phenotype distribution information
-    # This ensures the summary has complete information for all samples
     for gene in TARGET_GENES:
         if gene in results and gene in Y_full.columns:
-            # Get the phenotype distribution for this gene from the full dataset
             gene_phenotypes = Y_full[gene].dropna()
             if len(gene_phenotypes) > 0:
-                # Create phenotype distribution counts
                 phenotype_counts = {}
                 for val in gene_phenotypes:
-                    if val >= 0:  # Skip -1 values (no phenotype)
+                    if val >= 0:
                         phenotype = results[gene]["num_to_phenotype"].get(val, "Unknown")
                         if phenotype in phenotype_counts:
                             phenotype_counts[phenotype] += 1
                         else:
                             phenotype_counts[phenotype] = 1
 
-                # Store the full phenotype distribution in the results
                 print(f"Gene {gene}: Found {sum(phenotype_counts.values())} samples with phenotypes")
 
     print("Preparing results...")
