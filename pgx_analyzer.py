@@ -766,8 +766,7 @@ def analyze_counterfactuals(counterfactuals, original_sample):
         impact = {
             'feature': feature,
             'feature_gene': feature_gene,
-            'changed_features': differing_features,
-            'prediction_impact': "Unknown"  # Would be filled by actual PharmCAT run
+            'changed_features': differing_features
         }
         impacts.append(impact)
 
