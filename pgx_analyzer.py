@@ -344,6 +344,7 @@ def create_prediction_function(y_sample, gene):
     The function preserves the original phenotype distribution through random sampling when
     necessary.
     """
+
     def predict_gene(x, y_sample=y_sample):
         if len(x) == len(y_sample):
             return y_sample[gene].values
@@ -683,6 +684,202 @@ def run_lime_analysis(X, Y, phenotype_mappings, max_samples=100):
         }
 
     return results
+
+
+def generate_counterfactual_examples(X, sample_id, feature_names, top_k=10):
+    if sample_id not in X.index:
+        raise ValueError(f"Sample ID {sample_id} not found in the feature matrix")
+
+    original_sample = X.loc[sample_id].copy()
+    present_features = [f for f in feature_names if original_sample[f] == 1]
+
+    if len(present_features) > top_k:
+        present_features = present_features[:top_k]
+
+    counterfactuals = {}
+    for feature in present_features:
+        counterfactual = original_sample.copy()
+        counterfactual[feature] = 0
+        counterfactuals[feature] = counterfactual
+
+    return counterfactuals
+
+
+def analyze_counterfactuals(counterfactuals, original_sample, gene_predictions, num_to_phenotype):
+    impacts = []
+
+    for feature, counterfactual in counterfactuals.items():
+        original_features = original_sample.to_dict()
+        modified_features = counterfactual.to_dict()
+
+        differing_features = []
+        for f, v in original_features.items():
+            if v != modified_features.get(f):
+                differing_features.append(f)
+
+        feature_gene = feature.split('_')[0] if '_' in feature else None
+
+        impact = {
+            'feature': feature,
+            'feature_gene': feature_gene,
+            'changed_features': differing_features,
+            'prediction_impact': "Unknown"  # Would be filled by actual PharmCAT run
+        }
+        impacts.append(impact)
+
+    return impacts
+
+
+def extract_decision_rules(X, Y, gene, phenotype_mappings):
+    from sklearn.tree import DecisionTreeClassifier
+
+    if gene not in Y.columns:
+        return None
+
+    valid_indices = Y[Y[gene] >= 0].index
+    X_valid = X.loc[valid_indices]
+    y_valid = Y.loc[valid_indices, gene]
+
+    if len(y_valid) == 0:
+        return None
+
+    model = DecisionTreeClassifier(max_depth=4, min_samples_leaf=5)
+    model.fit(X_valid, y_valid)
+
+    return model
+
+
+def visualize_decision_tree(tree_model, feature_names, phenotype_mapping, output_file):
+    import matplotlib.pyplot as plt
+    from sklearn.tree import plot_tree
+
+    if tree_model is None:
+        return
+
+    num_to_phenotype = {v: k for k, v in phenotype_mapping.items()}
+
+    plt.figure(figsize=(20, 10))
+    plot_tree(tree_model, feature_names=feature_names,
+              class_names=[num_to_phenotype.get(i, str(i)) for i in range(len(num_to_phenotype))],
+              filled=True, rounded=True)
+
+    plt.savefig(output_file)
+    plt.close()
+
+
+def generate_rule_based_explanations(tree_model, feature_names, phenotype_mapping):
+    from sklearn.tree import _tree
+    import numpy as np
+
+    if tree_model is None:
+        return []
+
+    num_to_phenotype = {v: k for k, v in phenotype_mapping.items()}
+    tree = tree_model.tree_
+
+    def recurse(node, depth, path, paths):
+        if tree.feature[node] != _tree.TREE_UNDEFINED:
+            name = feature_names[tree.feature[node]]
+            threshold = tree.threshold[node]
+
+            path_yes = path + [[name, "≤", threshold]]
+            recurse(tree.children_left[node], depth + 1, path_yes, paths)
+
+            path_no = path + [[name, ">", threshold]]
+            recurse(tree.children_right[node], depth + 1, path_no, paths)
+        else:
+            path.append(['RESULT', num_to_phenotype.get(np.argmax(tree.value[node]), 'Unknown')])
+            paths.append(path)
+
+    paths = []
+    recurse(0, 1, [], paths)
+
+    rules = []
+    for path in paths:
+        rule = "IF "
+        for i, condition in enumerate(path[:-1]):
+            if i > 0:
+                rule += " AND "
+            if condition[1] == "≤" and condition[2] == 0.5:
+                rule += f"{condition[0]} is absent"
+            elif condition[1] == ">" and condition[2] == 0.5:
+                rule += f"{condition[0]} is present"
+            else:
+                rule += f"{condition[0]} {condition[1]} {condition[2]}"
+        rule += f" THEN phenotype is {path[-1][1]}"
+        rules.append(rule)
+
+    return rules
+
+
+def run_counterfactual_analysis(X, Y, phenotype_mappings, output_dir, top_k=10):
+    counterfactual_results = {}
+
+    for gene in TARGET_GENES:
+        if gene not in Y.columns:
+            continue
+
+        gene_results = []
+        valid_samples = Y[Y[gene] >= 0].index
+
+        if len(valid_samples) == 0:
+            continue
+
+        num_to_phenotype = {v: k for k, v in phenotype_mappings[gene].items()}
+
+        for sample_id in valid_samples[:min(5, len(valid_samples))]:
+            phenotype_num = Y.loc[sample_id, gene]
+            phenotype = num_to_phenotype.get(phenotype_num, "Unknown")
+
+            counterfactuals = generate_counterfactual_examples(X, sample_id, X.columns, top_k)
+            impacts = analyze_counterfactuals(counterfactuals, X.loc[sample_id], Y.loc[sample_id], num_to_phenotype)
+
+            sample_result = {
+                'sample_id': str(sample_id),
+                'phenotype': phenotype,
+                'variant_impacts': impacts
+            }
+
+            gene_results.append(sample_result)
+
+        counterfactual_results[gene] = gene_results
+
+    output_file = os.path.join(output_dir, "counterfactual_analysis.json")
+    with open(output_file, 'w') as f:
+        json.dump(counterfactual_results, f, indent=2)
+
+    return counterfactual_results
+
+
+def run_rule_extraction(X, Y, phenotype_mappings, output_dir):
+    rule_results = {}
+
+    for gene in TARGET_GENES:
+        if gene not in Y.columns:
+            continue
+
+        print(f"Extracting decision rules for {gene}...")
+
+        tree_model = extract_decision_rules(X, Y, gene, phenotype_mappings[gene])
+
+        if tree_model is None:
+            continue
+
+        tree_output_file = os.path.join(output_dir, f"{gene}_decision_tree.png")
+        visualize_decision_tree(tree_model, X.columns.tolist(), phenotype_mappings[gene], tree_output_file)
+
+        rules = generate_rule_based_explanations(tree_model, X.columns.tolist(), phenotype_mappings[gene])
+
+        rule_results[gene] = {
+            'tree_visualization': os.path.basename(tree_output_file),
+            'rules': rules
+        }
+
+    output_file = os.path.join(output_dir, "rule_extraction.json")
+    with open(output_file, 'w') as f:
+        json.dump(rule_results, f, indent=2)
+
+    return rule_results
 
 
 def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
@@ -1086,6 +1283,12 @@ def main():
                         help='Maximum number of samples for detailed SHAP/LIME analysis (use -1 for all samples)')
     parser.add_argument('--sensitivity', type=float, default=0.5,
                         help='Sensitivity value (0-1) for fuzzy logic between explanation methods')
+    parser.add_argument('--run_counterfactual', action='store_true',
+                        help='Run counterfactual analysis')
+    parser.add_argument('--run_rule_extraction', action='store_true',
+                        help='Extract and visualize decision rules')
+    parser.add_argument('--top_k', type=int, default=10,
+                        help='Number of top features for counterfactual analysis')
     args = parser.parse_args()
 
     args.sensitivity = max(0, min(1, args.sensitivity))
@@ -1172,9 +1375,38 @@ def main():
 
                 print(f"Gene {gene}: Found {sum(phenotype_counts.values())} samples with phenotypes")
 
+    # Initialize additional results
+    counterfactual_results = None
+    rule_results = None
+
+    # Run the new counterfactual analysis if requested
+    if args.run_counterfactual:
+        print("Running counterfactual analysis...")
+        counterfactual_results = run_counterfactual_analysis(X, Y, phenotype_mappings,
+                                                             args.output_dir, args.top_k)
+        print(f"Counterfactual analysis saved to {os.path.join(args.output_dir, 'counterfactual_analysis.json')}")
+
+    # Run the new rule extraction if requested
+    if args.run_rule_extraction:
+        print("Running rule extraction and visualization...")
+        rule_results = run_rule_extraction(X, Y, phenotype_mappings, args.output_dir)
+        print(f"Rule extraction results saved to {os.path.join(args.output_dir, 'rule_extraction.json')}")
+        print(f"Decision trees saved to {args.output_dir}")
+
     print("Preparing results...")
     json_output_file = os.path.join(args.output_dir, "pgx_results.json")
     json_results = create_enriched_results(results, X, json_output_file)
+
+    # Add the additional analysis results to the main json_results
+    if counterfactual_results:
+        json_results["counterfactual_analysis"] = counterfactual_results
+
+    if rule_results:
+        json_results["rule_extraction"] = rule_results
+
+    # Save the updated json_results
+    with open(json_output_file, 'w') as f:
+        json.dump(json_results, f, indent=2)
 
     print("Generating summary report...")
     summary_file = generate_summary_report(json_results, args.output_dir)
@@ -1184,6 +1416,13 @@ def main():
     print(f"Summary report: {summary_file}")
     print(f"Total samples in dataset: {len(common_samples)}")
     print(f"Samples used for detailed explanation analysis: {detailed_max_samples}")
+
+    # Add summary for new analyses
+    if args.run_counterfactual:
+        print(f"Counterfactual analysis: {os.path.join(args.output_dir, 'counterfactual_analysis.json')}")
+    if args.run_rule_extraction:
+        print(f"Rule extraction: {os.path.join(args.output_dir, 'rule_extraction.json')}")
+        print(f"Decision tree visualizations: {args.output_dir}/*.png")
 
 
 if __name__ == "__main__":
