@@ -183,7 +183,10 @@ def explainability_analysis(
         pharmcat_results: Input[Dataset],
         results: Output[Dataset],
         sensitivity: float = 0.7,
-        max_samples: int = -1
+        max_samples: int = -1,
+        run_counterfactual: bool = True,
+        run_rule_extraction: bool = True,
+        top_k: int = 10
 ):
     import subprocess
     from pathlib import Path
@@ -212,7 +215,7 @@ def explainability_analysis(
         f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run analysis.")
     print(f"Found phenotypes file: {phenotypes_csv}")
 
-    # Added max_samples parameter to the command
+    # Build the command with all parameters
     command = [
         "python", str(analyzer_script),
         "--phenotypes_file", str(phenotypes_csv),
@@ -220,8 +223,16 @@ def explainability_analysis(
         "--input_dir", str(input_data_path),
         "--convert_vcf",  # Convert VCF to CSV
         "--sensitivity", str(sensitivity),  # Add sensitivity parameter for fuzzy logic
-        "--max_samples", str(max_samples)  # Add max_samples parameter
+        "--max_samples", str(max_samples),  # Add max_samples parameter
+        "--top_k", str(top_k)  # Add top_k parameter for counterfactual analysis
     ]
+
+    # Add optional flags
+    if run_counterfactual:
+        command.append("--run_counterfactual")
+
+    if run_rule_extraction:
+        command.append("--run_rule_extraction")
 
     print(
         f"\nRunning explanability analysis command with sensitivity={sensitivity}, max_samples={max_samples}: {' '.join(command)}")
@@ -244,6 +255,29 @@ def explainability_analysis(
         raise Exception("Explanability analysis failed: pgx_results.json not found")
     else:
         print(f"Found expected output file: {expected_json}")
+
+    # Check for additional output files
+    if run_counterfactual:
+        counterfactual_json = results_path / "counterfactual_analysis.json"
+        if not counterfactual_json.is_file():
+            print(f"Warning: Expected 'counterfactual_analysis.json' not found: {counterfactual_json}")
+        else:
+            print(f"Found counterfactual analysis output: {counterfactual_json}")
+
+    if run_rule_extraction:
+        rule_json = results_path / "rule_extraction.json"
+        if not rule_json.is_file():
+            print(f"Warning: Expected 'rule_extraction.json' not found: {rule_json}")
+        else:
+            print(f"Found rule extraction output: {rule_json}")
+
+        # Look for decision tree images
+        tree_images = list(results_path.glob("*_decision_tree.png"))
+        if not tree_images:
+            print(f"Warning: No decision tree images found in results directory")
+        else:
+            print(f"Found {len(tree_images)} decision tree images")
+
     if not expected_preprocessed_dir.is_dir():
         print(f"Warning: Expected 'preprocessed' directory not found in results: {expected_preprocessed_dir}")
     else:
@@ -345,7 +379,10 @@ def pharmcat_pipeline(
         github_repo_url: str,
         branch: str = "main",
         sensitivity: float = 0.7,  # Control the blend between explanation methods
-        max_samples: int = -1  # -1 means analyze all samples
+        max_samples: int = -1,  # -1 means analyze all samples
+        run_counterfactual: bool = True,  # Run counterfactual analysis
+        run_rule_extraction: bool = True,  # Run rule extraction analysis
+        top_k: int = 10  # Number of top features for counterfactual analysis
 ):
     download_task = download_project(
         github_repo_url=github_repo_url,
@@ -367,7 +404,10 @@ def pharmcat_pipeline(
         input_data=download_task.outputs["input_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"],
         sensitivity=sensitivity,
-        max_samples=max_samples
+        max_samples=max_samples,
+        run_counterfactual=run_counterfactual,
+        run_rule_extraction=run_rule_extraction,
+        top_k=top_k
     )
     analysis_task.set_caching_options(False)
     analysis_task.set_cpu_request("2")
