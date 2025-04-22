@@ -183,6 +183,7 @@ def explainability_analysis(
         pharmcat_results: Input[Dataset],
         results: Output[Dataset],
         sensitivity: float = 0.7,
+        method: str = None,
         max_samples: int = -1,
         run_counterfactual: bool = True,
         run_rule_extraction: bool = True,
@@ -226,6 +227,9 @@ def explainability_analysis(
         "--max_samples", str(max_samples),  # Add max_samples parameter
         "--top_k", str(top_k)  # Add top_k parameter for counterfactual analysis
     ]
+
+    if method:
+        command.extend(["--method", method])
 
     # Add optional flags
     if run_counterfactual:
@@ -379,6 +383,7 @@ def pharmcat_pipeline(
         github_repo_url: str,
         branch: str = "main",
         sensitivity: float = 0.7,  # Control the blend between explanation methods
+        method: str = None,
         max_samples: int = -1,  # -1 means analyze all samples
         run_counterfactual: bool = True,  # Run counterfactual analysis
         run_rule_extraction: bool = True,  # Run rule extraction analysis
@@ -404,6 +409,7 @@ def pharmcat_pipeline(
         input_data=download_task.outputs["input_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"],
         sensitivity=sensitivity,
+        method=method,
         max_samples=max_samples,
         run_counterfactual=run_counterfactual,
         run_rule_extraction=run_rule_extraction,

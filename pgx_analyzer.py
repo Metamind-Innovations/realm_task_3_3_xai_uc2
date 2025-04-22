@@ -1020,7 +1020,7 @@ def run_rule_extraction(X, Y, phenotype_mappings, output_dir):
     return rule_results
 
 
-def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
+def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100, method=None):
     """
     Apply fuzzy logic to blend between SHAP, LIME, and perturbation-based explanation methods.
 
@@ -1057,6 +1057,10 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
         than this value, a random subset will be selected. Set to -1
         to use all available samples.
 
+    method : str, default=None
+        If provided, overrides sensitivity and uses only the specified method.
+        Valid values: 'shap', 'lime', 'perturbation'
+
     Returns
     -------
     dict
@@ -1092,8 +1096,32 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
     Each method's results are normalized before blending to ensure fair contribution
     regardless of the scale of the original importance values.
     """
+    # Override with explicit method if specified
+    if method is not None:
+        if method.lower() == 'shap':
+            print(f"Using SHAP analysis only (explicit method choice)...")
+            return run_shap_analysis(X, Y, phenotype_mappings, max_samples)
+        elif method.lower() == 'lime':
+            print(f"Using LIME analysis only (explicit method choice)...")
+            return run_lime_analysis(X, Y, phenotype_mappings, max_samples)
+        elif method.lower() == 'perturbation':
+            print(f"Using perturbation analysis only (explicit method choice)...")
+            return run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
+        else:
+            print(f"Warning: Unknown method '{method}', falling back to sensitivity-based logic")
+
     sensitivity = max(0.0, min(1.0, sensitivity))
 
+    # Special case handling for the extremes
+    if sensitivity == 0.0:
+        print("Using perturbation-based analysis only (sensitivity=0)...")
+        return run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
+
+    if sensitivity == 1.0:
+        print("Using SHAP analysis only (sensitivity=1)...")
+        return run_shap_analysis(X, Y, phenotype_mappings, max_samples)
+
+    # For values in between, use the blending approach
     if sensitivity <= 0.33:
         print(f"Using method blend with low sensitivity ({sensitivity:.2f}):")
         perturbation_weight = 0.7 - (sensitivity * 0.9)
@@ -1120,18 +1148,6 @@ def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100):
         print(f"  - Perturbation: {perturbation_weight:.1%}")
         print(f"  - LIME: {lime_weight:.1%}")
         print(f"  - SHAP: {shap_weight:.1%}")
-
-    if perturbation_weight >= 0.99:
-        print("Using perturbation-based analysis only...")
-        return run_perturbation_analysis(X, Y, phenotype_mappings, max_samples)
-
-    if lime_weight >= 0.99:
-        print("Using LIME-based analysis only...")
-        return run_lime_analysis(X, Y, phenotype_mappings, max_samples)
-
-    if shap_weight >= 0.99:
-        print("Using SHAP analysis only...")
-        return run_shap_analysis(X, Y, phenotype_mappings, max_samples)
 
     results = {}
     blended_results = {}
@@ -1418,9 +1434,11 @@ def main():
     parser.add_argument('--output_dir', default='pgx_results', help='Output directory for results')
     parser.add_argument('--convert_vcf', action='store_true', help='Convert VCF files to CSV format')
     parser.add_argument('--max_samples', type=int, default=100,
-                        help='Maximum number of samples for detailed SHAP/LIME analysis (use -1 for all samples)')
+                        help='Maximum number of samples for detailed analysis (use -1 for all samples)')
     parser.add_argument('--sensitivity', type=float, default=0.5,
                         help='Sensitivity value (0-1) for fuzzy logic between explanation methods')
+    parser.add_argument('--method', type=str, choices=['shap', 'lime', 'perturbation'],
+                        help='Explicitly choose a single explanation method (overrides sensitivity)')
     parser.add_argument('--run_counterfactual', action='store_true',
                         help='Run counterfactual analysis')
     parser.add_argument('--run_rule_extraction', action='store_true',
@@ -1495,8 +1513,10 @@ def main():
         print(f"Using all {len(common_samples)} samples for detailed feature importance analysis")
 
     print(f"Running analysis with sensitivity={args.sensitivity}...")
+    if args.method:
+        print(f"Using explicit method: {args.method}")
     results = apply_fuzzy_logic(args.sensitivity, X_detailed, Y_detailed, phenotype_mappings,
-                                max_samples=detailed_max_samples)
+                                max_samples=detailed_max_samples, method=args.method)
 
     for gene in TARGET_GENES:
         if gene in results and gene in Y_full.columns:
