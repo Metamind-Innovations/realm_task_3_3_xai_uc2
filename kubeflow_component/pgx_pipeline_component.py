@@ -375,6 +375,94 @@ def fairness_analysis(
     print("\nFairness analysis component completed successfully.")
 
 
+@kfp.dsl.component(
+    base_image="python:3.10-slim",
+    packages_to_install=["matplotlib", "numpy", "pandas", "networkx", "seaborn"]
+)
+def visualization_analysis(
+        project_files: Input[Model],
+        analysis_results: Input[Dataset],
+        visualization_results: Output[Dataset]
+):
+    import subprocess
+    from pathlib import Path
+
+    project_files_path = Path(project_files.path)
+    analysis_results_path = Path(analysis_results.path)
+    visualization_results_path = Path(visualization_results.path)
+    visualization_results_path.mkdir(parents=True, exist_ok=True)
+
+    print(f"Ensured Visualization results directory exists: {visualization_results_path}")
+
+    visualizer_script = project_files_path / "pgx_visualizer.py"
+    if not visualizer_script.is_file():
+        raise Exception(f"Visualizer script not found at {visualizer_script}")
+
+    print(f"Found Visualizer script: {visualizer_script}")
+
+    # Find the required input files in the analysis results directory
+    pgx_results_file = analysis_results_path / "pgx_results.json"
+    counterfactual_file = analysis_results_path / "counterfactual_analysis.json"
+    rules_file = analysis_results_path / "rule_extraction.json"
+    decision_trees_file = analysis_results_path / "decision_trees.json"
+
+    command = [
+        "python", str(visualizer_script),
+        "--output_dir", str(visualization_results_path)
+    ]
+
+    if pgx_results_file.is_file():
+        command.extend(["--pgx_results", str(pgx_results_file)])
+        print(f"Found PGx results file: {pgx_results_file}")
+    else:
+        print(f"Warning: PGx results file not found at {pgx_results_file}")
+
+    if counterfactual_file.is_file():
+        command.extend(["--counterfactual", str(counterfactual_file)])
+        print(f"Found counterfactual analysis file: {counterfactual_file}")
+    else:
+        print(f"Warning: Counterfactual analysis file not found at {counterfactual_file}")
+
+    if rules_file.is_file():
+        command.extend(["--rules", str(rules_file)])
+        print(f"Found rule extraction file: {rules_file}")
+    else:
+        print(f"Warning: Rule extraction file not found at {rules_file}")
+
+    if decision_trees_file.is_file():
+        command.extend(["--decision_trees", str(decision_trees_file)])
+        print(f"Found decision trees file: {decision_trees_file}")
+    else:
+        print(f"Warning: Decision trees file not found at {decision_trees_file}")
+
+    print(f"\nRunning Visualization analysis command: {' '.join(command)}")
+
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
+        print("Visualization script executed successfully.")
+    except subprocess.CalledProcessError as e:
+        print("\n--- Error running Visualization script ---")
+        print(f"Exit Code: {e.returncode}")
+        print(f"stdout:\n{e.stdout}")
+        print(f"stderr:\n{e.stderr}")
+        raise Exception("Visualization script failed.")
+    except Exception as e:
+        print(f"\nAn unexpected error occurred during visualization: {e}")
+        raise
+
+    print("\nVerifying visualization output...")
+    expected_summary = visualization_results_path / "pgx_summary_dashboard.png"
+    if not expected_summary.is_file():
+        print(f"Warning: Expected summary dashboard not found at {expected_summary}")
+    else:
+        print(f"Found summary dashboard: {expected_summary}")
+
+    dashboards = list(visualization_results_path.glob("dashboard_*.png"))
+    print(f"Found {len(dashboards)} gene-specific dashboards")
+
+    print("\nVisualization component completed successfully.")
+
+
 @kfp.dsl.pipeline(
     name="PharmCAT PGx Analysis Pipeline (Dockerized)",
     description="Pipeline using pre-built Docker image for PharmCAT analysis"
@@ -431,6 +519,16 @@ def pharmcat_pipeline(
     fairness_task.set_cpu_limit("4")
     fairness_task.set_memory_request("4G")
     fairness_task.set_memory_limit("8G")
+
+    visualization_task = visualization_analysis(
+        project_files=download_task.outputs["project_files"],
+        analysis_results=analysis_task.outputs["results"]
+    )
+    visualization_task.set_caching_options(False)
+    visualization_task.set_cpu_request("2")
+    visualization_task.set_cpu_limit("4")
+    visualization_task.set_memory_request("4G")
+    visualization_task.set_memory_limit("8G")
 
 
 if __name__ == "__main__":
