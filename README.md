@@ -79,6 +79,12 @@ The `pgx_visualizer.py` script supports the following command-line arguments:
 - `--decision_trees` (str): Path to the decision_trees.json file
 - `--output_dir` (str, default: 'visualizations'): Directory to save visualization outputs
 
+The `pgx_fairness_analyzer.py` script supports the following command-line arguments:
+
+- `--demographic_file` (str, Required): Path to the Demographics/pgx_cohort.csv file
+- `--phenotypes_file` (str, Required): Path to the result/phenotypes.csv file
+- `--output_dir` (str, default: 'fairness_results'): Directory to save fairness analysis outputs
+
 E.G. For a perturbation based analysis with counterfactual and rule explanations run: `python pgx_analyzer.py --input_dir data/ --phenotypes_file result/phenotypes.csv --output_dir detailed_results --convert_vcf --sensitivity 0.8 --max_samples -1 --method perturbation--run_counterfactual --run_rule_extraction`
 
 ## Analyzer JSON Output
@@ -125,7 +131,45 @@ Features in the output follow these patterns:
 - `GENE_rsID_gt_GENOTYPE`: Genotype (e.g., "CYP2C19_rs3758581_gt_1/1" for homozygous)
 - `GENE_posNUMBER`: Position-based feature (e.g., "CYP3A5_pos99652770")
 
-## Interpreting Decision Tree Visualizations
+### Fairness Scores & Ratings
+
+The tool generates fairness scores (40-100) for each demographic dimension:
+- **90-100**: Excellent - No significant concerns
+- **80-89**: Good - Minor issues detected
+- **70-79**: Fair - Some noteworthy differences
+- **60-69**: Concerning - Significant disparities detected
+- **<60**: Poor - Substantial fairness issues
+- **Insufficient Data**: Too few samples for reliable assessment
+
+### Key Parameters
+
+#### In overall_fairness_report.json:
+
+- **fairness_scores**: Numerical assessment of fairness for each demographic dimension
+- **fairness_ratings**: Qualitative assessment from "Excellent" to "Poor"
+- **data_completeness**: Identifies missing populations and small sample groups that limit analysis
+- **significant_demographic_effects**: Statistically significant associations with p-values and effect sizes
+- **disparate_impact_summary**: Cases where phenotype rates differ substantially between demographic groups
+- **pharmacogenomic_context**: Notes distinguishing algorithmic bias from natural genetic variation
+
+#### In individual fairness reports (e.g., HG00276_fairness_report.json):
+
+- **demographics**: The specific demographic groups of this individual
+- **phenotypes**: Predicted drug metabolism capabilities for each gene
+- **demographic_comparison**: How this individual's group phenotype rates compare to overall distributions
+- **data_quality.small_sample_warnings**: Flags if this individual belongs to an underrepresented group
+- **summary**: Human-readable explanation of key fairness concerns relevant to this individual
+
+### Interpreting Results
+
+When reviewing PGX fairness reports, remember:
+
+1. **Genetic Context Matters**: Differences between populations often reflect natural genetic variation rather than algorithmic bias
+2. **Sample Size Sensitivity**: Findings for groups with fewer than 5 samples should be interpreted with extreme caution
+3. **Missing Populations**: Absence of certain populations (e.g., SAS - South Asian) limits comprehensive fairness assessment
+4. **Statistical Significance vs. Clinical Relevance**: Statistically significant findings may not always indicate clinically relevant bias
+
+## Decision Tree Visualizations
 This project generates decision tree visualizations (files like `CYP2C19_decision_tree.png`) that represent surrogate models approximating PharmCAT's rule-based decision logic. These visualizations help explain how genetic variants contribute to specific pharmacogenomic phenotype predictions.
 
 ### How to Interpret the Decision Trees
