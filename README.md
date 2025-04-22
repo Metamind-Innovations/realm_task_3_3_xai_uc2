@@ -145,6 +145,9 @@ In the example tree for CYP2C19, we can see:
 2. Secondary splits on `CYP2C19_rs12248560` and `CYP3A5_rs776746` further refine the phenotype predictions
 3. The presence of `CYP2B6_rs3745274` (following the right branch at this decision point) contributes to Rapid Metabolizer (RM) predictions
 
+
+An example tree for CYP2B6: ![Decision Tree](CYP2C19_decision_tree.png)
+
 ### Why This Matters
 
 These decision trees provide several insights:
