@@ -60,7 +60,8 @@ def download_project(
         "project_files": [
             "pgx_fairness_analyzer.py",
             "pgx_analyzer.py",
-            "requirements.txt"
+            "requirements.txt",
+            "pgx_visualizer.py"
         ],
         "input_data": ["data"],
         "demographic_data": ["Demographics"]
