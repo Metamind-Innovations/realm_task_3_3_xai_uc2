@@ -302,11 +302,23 @@ def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_CO
         print(f"  - {gene}: {non_na_count} samples with phenotypes")
 
         if non_na_count > 0:
-            unique_phenotypes = sorted(phenotypes_df[gene].dropna().unique())
-            phenotype_to_num = {phenotype: i for i, phenotype in enumerate(unique_phenotypes)}
-            phenotype_mappings[gene] = phenotype_to_num
+            # Filter out INDETERMINATE values before mapping
+            valid_phenotypes = phenotypes_df[gene].dropna()
+            valid_phenotypes = valid_phenotypes[valid_phenotypes != "INDETERMINATE"]
 
-            Y[gene] = phenotypes_df[gene].map(lambda x: phenotype_to_num.get(x, -1) if pd.notna(x) else -1)
+            if len(valid_phenotypes) > 0:
+                unique_phenotypes = sorted(valid_phenotypes.unique())
+                phenotype_to_num = {phenotype: i for i, phenotype in enumerate(unique_phenotypes)}
+                phenotype_mappings[gene] = phenotype_to_num
+
+                # Map phenotypes to numbers, marking INDETERMINATE as -1
+                Y[gene] = phenotypes_df[gene].map(
+                    lambda x: phenotype_to_num.get(x, -1) if pd.notna(x) and x != "INDETERMINATE" else -1
+                )
+            else:
+                # No valid phenotypes after filtering
+                Y[gene] = -1
+                phenotype_mappings[gene] = {}
 
     return Y, phenotypes_df, phenotype_mappings
 
@@ -761,7 +773,7 @@ def analyze_counterfactuals(counterfactuals, original_sample):
             if v != modified_features.get(f):
                 differing_features.append(f)
 
-        feature_gene = feature.split('_')[0] if '_' in feature else None
+        feature_gene = feature.split('_')[0] if '_' in feature else ""
 
         impact = {
             'feature': feature,
@@ -1228,7 +1240,7 @@ def generate_variant_explanation(feature, effect):
         if variant and gene:
             variant_text = f"{variant} in {gene}"
 
-    return f"{variant_text} with {effect} contribution"
+    return f"{variant_text} {'increases' if effect == 'positive' else 'decreases'} likelihood of this phenotype"
 
 
 def create_enriched_results(shap_results, X, output_file):
@@ -1281,7 +1293,7 @@ def create_enriched_results(shap_results, X, output_file):
         for idx in top_indices:
             if idx < len(feature_names):
                 feature = feature_names[idx]
-                feature_gene = feature.split('_')[0] if '_' in feature else "Unknown"
+                feature_gene = feature.split('_')[0] if '_' in feature else ""
 
                 if feature_gene in TARGET_GENES:
                     features_by_gene[feature_gene].append({
@@ -1291,8 +1303,9 @@ def create_enriched_results(shap_results, X, output_file):
 
         phenotype_counts = {}
         for pred in predictions:
-            phenotype = num_to_phenotype.get(pred, "Unknown")
-            phenotype_counts[phenotype] = phenotype_counts.get(phenotype, 0) + 1
+            if pred in num_to_phenotype:
+                phenotype = num_to_phenotype[pred]
+                phenotype_counts[phenotype] = phenotype_counts.get(phenotype, 0) + 1
 
         json_results["gene_explanations"][gene] = {
             "prediction_distribution": phenotype_counts,
@@ -1304,7 +1317,12 @@ def create_enriched_results(shap_results, X, output_file):
         for i in range(min(10, len(sample_indices))):
             sample = sample_indices[i]
             pred = predictions[i]
-            phenotype = num_to_phenotype.get(pred, "Unknown")
+
+            # Skip samples with unmappable phenotypes
+            if pred not in num_to_phenotype:
+                continue
+
+            phenotype = num_to_phenotype[pred]
 
             sample_shap = shap_values[i]
             top_contrib_indices = np.argsort(-np.abs(sample_shap))[:10]
@@ -1409,7 +1427,9 @@ def generate_summary_report(json_results, output_dir):
 
             f.write("Top contributions:\n")
             for j, contrib in enumerate(sample['top_contributions'][:5]):
-                f.write(f"{j + 1}. {contrib['feature']} - importance value: {contrib['shap_value']:.4f}\n")
+                shap_value = contrib['shap_value']
+                direction = "increases" if shap_value > 0 else "decreases"
+                f.write(f"{j + 1}. {contrib['feature']} - {direction} phenotype likelihood: {abs(shap_value):.4f}\n")
 
     print(f"Summary report saved to {summary_file}")
     return summary_file
