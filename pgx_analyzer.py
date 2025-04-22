@@ -969,39 +969,91 @@ def run_counterfactual_analysis(X, Y, phenotype_mappings, output_dir, top_k=10):
     return counterfactual_results
 
 
+def extract_decision_tree_data(tree_model, feature_names, phenotype_mapping):
+    """
+    Extract the complete structure of a decision tree model as a JSON-serializable dictionary.
+    """
+    from sklearn.tree import _tree
+    import numpy as np
+
+    if tree_model is None:
+        return None
+
+    tree = tree_model.tree_
+    num_to_phenotype = {v: k for k, v in phenotype_mapping.items()}
+
+    def recurse_tree(node_id, depth=0):
+        if node_id == _tree.TREE_UNDEFINED:
+            return None
+
+        # Extract node information
+        feature_index = tree.feature[node_id]
+        threshold = tree.threshold[node_id]
+        impurity = tree.impurity[node_id]
+        n_samples = int(tree.n_node_samples[node_id])
+        value = tree.value[node_id][0].tolist()
+
+        # Determine node type and dominant class
+        if feature_index == _tree.TREE_UNDEFINED:  # Leaf node
+            class_index = np.argmax(value)
+            class_name = num_to_phenotype.get(class_index, f"Unknown_{class_index}")
+            node_type = "leaf"
+        else:  # Decision node
+            feature_name = feature_names[feature_index]
+            class_index = np.argmax(value)
+            class_name = num_to_phenotype.get(class_index, f"Unknown_{class_index}")
+            node_type = "decision"
+
+        # Create node data structure
+        node_data = {
+            "node_id": int(node_id),
+            "depth": depth,
+            "type": node_type,
+            "samples": n_samples,
+            "impurity": float(impurity),
+            "value": value,
+            "class": class_name
+        }
+
+        # Add feature information for decision nodes
+        if node_type == "decision":
+            node_data["feature"] = feature_name
+            node_data["threshold"] = float(threshold)
+
+            # Recurse to children
+            left_child = recurse_tree(tree.children_left[node_id], depth + 1)
+            right_child = recurse_tree(tree.children_right[node_id], depth + 1)
+
+            if left_child:
+                node_data["left"] = left_child
+            if right_child:
+                node_data["right"] = right_child
+
+        return node_data
+
+    # Start recursion from the root node
+    tree_data = recurse_tree(0)
+
+    # Add metadata
+    result = {
+        "metadata": {
+            "num_nodes": tree.node_count,
+            "max_depth": tree_model.max_depth,
+            "classes": [num_to_phenotype.get(i, f"Unknown_{i}") for i in range(len(num_to_phenotype))]
+        },
+        "tree": tree_data
+    }
+
+    return result
+
+
 def run_rule_extraction(X, Y, phenotype_mappings, output_dir):
     """
-    Extract and visualize decision rules that approximate PharmCAT's phenotype predictions.
-
-    Rule extraction was chosen as an explainability method because:
-    1. PharmCAT itself is a rule-based system, so rules are a natural fit for explaining it
-    2. Decision trees provide an intuitive visual representation of hierarchical rules
-    3. The extracted rules can be compared to PharmCAT's actual decision logic for validation
-
-    The decision trees show:
-    - Gini impurity values (0-1): Higher values indicate more diverse phenotype distributions,
-      with 0 meaning perfect purity (all samples have same phenotype) and 1 meaning maximum
-      impurity (equal distribution across all phenotypes)
-    - Weighted samples: Number of samples at each decision point
-    - Class distribution: The phenotype distribution at each node
-
-    Parameters
-    ----------
-    X : pandas.DataFrame
-        Feature matrix with variants
-    Y : pandas.DataFrame
-        Target matrix with phenotype encodings
-    phenotype_mappings : dict
-        Mapping from phenotype names to numeric encodings
-    output_dir : str
-        Directory to save the visualization and rule files
-
-    Returns
-    -------
-    dict
-        Rule extraction results organized by gene
+    Extract decision rules that approximate PharmCAT's phenotype predictions and
+    store them as JSON structures instead of visualized trees.
     """
     rule_results = {}
+    decision_trees = {}
 
     for gene in TARGET_GENES:
         if gene not in Y.columns:
@@ -1015,21 +1067,29 @@ def run_rule_extraction(X, Y, phenotype_mappings, output_dir):
         if tree_model is None:
             continue
 
-        tree_output_file = os.path.join(output_dir, f"{gene}_decision_tree.png")
-        visualize_decision_tree(tree_model, X.columns.tolist(), gene_phenotype_mapping, tree_output_file)
+        tree_data = extract_decision_tree_data(tree_model, X.columns.tolist(), gene_phenotype_mapping)
 
+        # Extract text rules for easier interpretation
         rules = generate_rule_based_explanations(tree_model, X.columns.tolist(), gene_phenotype_mapping)
 
         rule_results[gene] = {
-            'tree_visualization': os.path.basename(tree_output_file),
             'rules': rules
         }
 
+        # Store the tree structure separately
+        decision_trees[gene] = tree_data
+
+    # Save the rule extraction results
     output_file = os.path.join(output_dir, "rule_extraction.json")
     with open(output_file, 'w') as f:
         json.dump(rule_results, f, indent=2)
 
-    return rule_results
+    # Save all decision tree structures in a single file
+    trees_output_file = os.path.join(output_dir, "decision_trees.json")
+    with open(trees_output_file, 'w') as f:
+        json.dump(decision_trees, f, indent=2)
+
+    return rule_results, decision_trees
 
 
 def apply_fuzzy_logic(sensitivity, X, Y, phenotype_mappings, max_samples=100, method=None):
@@ -1556,6 +1616,7 @@ def main():
     # Initialize additional results
     counterfactual_results = None
     rule_results = None
+    decision_trees = None
 
     # Run the new counterfactual analysis if requested
     if args.run_counterfactual:
@@ -1564,12 +1625,12 @@ def main():
                                                              args.output_dir, args.top_k)
         print(f"Counterfactual analysis saved to {os.path.join(args.output_dir, 'counterfactual_analysis.json')}")
 
-    # Run the new rule extraction if requested
+    # Run the rule extraction if requested - note the updated function call that returns decision trees
     if args.run_rule_extraction:
-        print("Running rule extraction and visualization...")
-        rule_results = run_rule_extraction(X, Y, phenotype_mappings, args.output_dir)
+        print("Running rule extraction and data extraction...")
+        rule_results, decision_trees = run_rule_extraction(X, Y, phenotype_mappings, args.output_dir)
         print(f"Rule extraction results saved to {os.path.join(args.output_dir, 'rule_extraction.json')}")
-        print(f"Decision trees saved to {args.output_dir}")
+        print(f"Decision tree data saved to {os.path.join(args.output_dir, 'decision_trees.json')}")
 
     print("Preparing results...")
     json_output_file = os.path.join(args.output_dir, "pgx_results.json")
@@ -1581,6 +1642,10 @@ def main():
 
     if rule_results:
         json_results["rule_extraction"] = rule_results
+
+    # Add decision tree data to the main results if available
+    if decision_trees:
+        json_results["decision_trees"] = decision_trees
 
     # Save the updated json_results
     with open(json_output_file, 'w') as f:
@@ -1600,7 +1665,7 @@ def main():
         print(f"Counterfactual analysis: {os.path.join(args.output_dir, 'counterfactual_analysis.json')}")
     if args.run_rule_extraction:
         print(f"Rule extraction: {os.path.join(args.output_dir, 'rule_extraction.json')}")
-        print(f"Decision tree visualizations: {args.output_dir}/*.png")
+        print(f"Decision tree data: {os.path.join(args.output_dir, 'decision_trees.json')}")
 
 
 if __name__ == "__main__":
