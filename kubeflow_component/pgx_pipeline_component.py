@@ -12,6 +12,7 @@ def download_project(
         project_files: Output[Model],
         input_data: Output[Dataset],
         demographic_data: Output[Dataset],
+        groundtruth_data: Output[Dataset],
         branch: str = "main"
 ):
     import subprocess
@@ -50,21 +51,25 @@ def download_project(
     project_files_path = Path(project_files.path)
     input_data_path = Path(input_data.path)
     demographic_data_path = Path(demographic_data.path)
+    groundtruth_data_path = Path(groundtruth_data.path)
 
     project_files_path.mkdir(parents=True, exist_ok=True)
     input_data_path.mkdir(parents=True, exist_ok=True)
     demographic_data_path.mkdir(parents=True, exist_ok=True)
+    groundtruth_data_path.mkdir(parents=True, exist_ok=True)
     print(f"Created KFP output directories.")
 
     items_to_copy = {
         "project_files": [
-            "pgx_fairness_analyzer.py",
-            "pgx_analyzer.py",
-            "requirements.txt",
-            "pgx_visualizer.py"
+            "vcf_to_csv.py",
+            "phenotype_mapper.py",
+            "explainer.py",
+            "fairness_bias_analyzer.py",
+            "requirements.txt"
         ],
         "input_data": ["data"],
-        "demographic_data": ["Demographics"]
+        "demographic_data": ["Demographics"],
+        "groundtruth_data": ["Groundtruth"]
     }
     found_items = {key: [] for key in items_to_copy}
     copied_items_count = 0
@@ -109,6 +114,15 @@ def download_project(
                         print(f"  Warning: Expected '{item_name}' to be a directory, but it's a file.")
                         continue
 
+                elif target_list_key == "groundtruth_data":
+                    dst_path = groundtruth_data_path
+                    if is_dir:
+                        print(f"Copying contents of '{item_name}' from {src_path} to {dst_path}...")
+                        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+                    else:
+                        print(f"  Warning: Expected '{item_name}' to be a directory, but it's a file.")
+                        continue
+
                 if dst_path:
                     found_items[target_list_key].append(item_name)
                     copied_items_count += 1
@@ -118,43 +132,6 @@ def download_project(
                 print(f"  Error copying {item_name} from {src_path} to {dst_path}: {e}")
 
     print(f"\nFinished search. Copied {copied_items_count} items.")
-
-    print("\nVerifying copied items:")
-    missing_items = False
-    for target_list_key, target_items in items_to_copy.items():
-        print(f"  Checking {target_list_key}:")
-        for item in target_items:
-            expected_path = None
-            is_content_check = False
-            if target_list_key == "project_files":
-                expected_path = project_files_path / item
-            elif target_list_key == "input_data":
-                expected_path = input_data_path
-                is_content_check = True
-            elif target_list_key == "demographic_data":
-                expected_path = demographic_data_path
-                is_content_check = True
-
-            if expected_path:
-                if is_content_check:
-                    if not any(expected_path.iterdir()):
-                        print(f"    - {item}: Content not found or empty in {expected_path}!")
-                        missing_items = True
-                    else:
-                        print(f"    + {item}: Content found in {expected_path}")
-                elif expected_path.exists():
-                    print(f"    + {item}: Found at {expected_path}")
-                else:
-                    print(f"    - {item}: Not found at {expected_path}!")
-                    missing_items = True
-            else:
-                print(f"    ? {item}: Could not determine expected path.")
-                missing_items = True
-
-    if missing_items:
-        print("\nWarning: Some required files/folders were not found in the repository or failed to copy.")
-    else:
-        print("\nAll required items successfully copied.")
 
     print(f"Removing temporary clone directory: {temp_dir}")
     shutil.rmtree(temp_dir)
@@ -176,307 +153,285 @@ def pharmcat_analysis_docker(
 
 @kfp.dsl.component(
     base_image="python:3.10-slim",
-    packages_to_install=["matplotlib", "numpy", "pandas", "scikit-learn", "seaborn", "shap"]
+    packages_to_install=["pandas", "numpy"]
 )
-def explainability_analysis(
+def vcf_to_csv(
         project_files: Input[Model],
         input_data: Input[Dataset],
-        pharmcat_results: Input[Dataset],
-        results: Output[Dataset],
-        sensitivity: float = 0.7,
-        method: str = None,
-        max_samples: int = -1,
-        run_counterfactual: bool = True,
-        run_rule_extraction: bool = True,
-        top_k: int = 10
+        csv_output: Output[Dataset]
 ):
     import subprocess
+    import os
     from pathlib import Path
+
     project_files_path = Path(project_files.path)
     input_data_path = Path(input_data.path)
-    pharmcat_results_path = Path(pharmcat_results.path)
-    results_path = Path(results.path)
-    results_path.mkdir(parents=True, exist_ok=True)
-    print(f"Ensured results directory exists: {results_path}")
-    analyzer_script = project_files_path / "pgx_analyzer.py"
-    if not analyzer_script.is_file(): raise Exception(f"Analyzer script not found at {analyzer_script}")
-    print(f"Found analyzer script: {analyzer_script}")
-    req_file = project_files_path / "requirements.txt"
-    if req_file.is_file():
-        print(f"Installing requirements from {req_file}...")
-        try:
-            subprocess.run(["pip", "install", "-r", str(req_file)], check=True, capture_output=True, text=True)
-            print("Requirements installed.")
-        except subprocess.CalledProcessError as e:
-            print(f"Error installing requirements: {e.stderr}")
-            raise Exception("Failed to install requirements for analysis.")
-    else:
-        print("No requirements.txt found in project_files, skipping pip install.")
-    phenotypes_csv = pharmcat_results_path / "phenotypes.csv"
-    if not phenotypes_csv.is_file(): raise Exception(
-        f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run analysis.")
-    print(f"Found phenotypes file: {phenotypes_csv}")
+    csv_output_path = Path(csv_output.path)
 
-    # Build the command with all parameters
+    csv_output_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created CSV output directory: {csv_output_path}")
+
+    vcf_to_csv_script = project_files_path / "vcf_to_csv.py"
+    if not vcf_to_csv_script.is_file():
+        raise Exception(f"VCF to CSV script not found at {vcf_to_csv_script}")
+
+    print(f"Found VCF to CSV script: {vcf_to_csv_script}")
+
+    output_csv_file = csv_output_path / "encoded.csv"
+
     command = [
-        "python", str(analyzer_script),
-        "--phenotypes_file", str(phenotypes_csv),
-        "--output_dir", str(results_path),
+        "python", str(vcf_to_csv_script),
         "--input_dir", str(input_data_path),
-        "--convert_vcf",  # Convert VCF to CSV
-        "--sensitivity", str(sensitivity),  # Add sensitivity parameter for fuzzy logic
-        "--max_samples", str(max_samples),  # Add max_samples parameter
-        "--top_k", str(top_k)  # Add top_k parameter for counterfactual analysis
+        "--output_csv", str(output_csv_file)
     ]
 
-    if method:
-        command.extend(["--method", method])
+    print(f"\nRunning VCF to CSV conversion: {' '.join(command)}")
 
-    # Add optional flags
-    if run_counterfactual:
-        command.append("--run_counterfactual")
-
-    if run_rule_extraction:
-        command.append("--run_rule_extraction")
-
-    print(
-        f"\nRunning explanability analysis command with sensitivity={sensitivity}, max_samples={max_samples}: {' '.join(command)}")
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
-        print("Explanability analysis script executed successfully.")
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("VCF to CSV conversion completed successfully.")
     except subprocess.CalledProcessError as e:
-        print("\n--- Error running explanability analysis script ---")
-        print(f"Exit Code: {e.returncode}")
-        print(f"stdout:\n{e.stdout}")
-        print(f"stderr:\n{e.stderr}")
-        raise Exception("Explanability analysis script failed.")
-    except Exception as e:
-        print(f"\nAn unexpected error occurred during explanability analysis: {e}")
-        raise
-    print("\nVerifying explanability analysis output...")
-    expected_json = results_path / "pgx_results.json"
-    expected_preprocessed_dir = results_path / "preprocessed"
-    if not expected_json.is_file():
-        raise Exception("Explanability analysis failed: pgx_results.json not found")
-    else:
-        print(f"Found expected output file: {expected_json}")
+        print(f"Error during VCF to CSV conversion: {e.stdout}\n{e.stderr}")
+        raise Exception("VCF to CSV conversion failed.")
 
-    # Check for additional output files
-    if run_counterfactual:
-        counterfactual_json = results_path / "counterfactual_analysis.json"
-        if not counterfactual_json.is_file():
-            print(f"Warning: Expected 'counterfactual_analysis.json' not found: {counterfactual_json}")
-        else:
-            print(f"Found counterfactual analysis output: {counterfactual_json}")
+    if not output_csv_file.is_file():
+        raise Exception(f"Expected output CSV file not found at {output_csv_file}")
 
-    if run_rule_extraction:
-        rule_json = results_path / "rule_extraction.json"
-        if not rule_json.is_file():
-            print(f"Warning: Expected 'rule_extraction.json' not found: {rule_json}")
-        else:
-            print(f"Found rule extraction output: {rule_json}")
-
-        # Look for decision tree images
-        tree_images = list(results_path.glob("*_decision_tree.png"))
-        if not tree_images:
-            print(f"Warning: No decision tree images found in results directory")
-        else:
-            print(f"Found {len(tree_images)} decision tree images")
-
-    if not expected_preprocessed_dir.is_dir():
-        print(f"Warning: Expected 'preprocessed' directory not found in results: {expected_preprocessed_dir}")
-    else:
-        print(f"Found expected output directory: {expected_preprocessed_dir}")
-        preprocessed_files = list(expected_preprocessed_dir.glob("*.csv"))
-        if not preprocessed_files:
-            print(f"  Warning: 'preprocessed' directory exists but contains no CSV files.")
-        else:
-            print(f"  Found {len(preprocessed_files)} CSV files in 'preprocessed'.")
-    print("\nExplanability analysis component completed successfully.")
+    print(f"VCF to CSV conversion successful. Output saved to {output_csv_file}")
 
 
 @kfp.dsl.component(
     base_image="python:3.10-slim",
-    packages_to_install=["numpy", "pandas", "scipy"]
+    packages_to_install=["pandas"]
 )
-def fairness_analysis(
+def phenotype_mapper(
+        project_files: Input[Model],
+        pharmcat_results: Input[Dataset],
+        encoded_output: Output[Dataset]
+):
+    import subprocess
+    import os
+    from pathlib import Path
+
+    project_files_path = Path(project_files.path)
+    pharmcat_results_path = Path(pharmcat_results.path)
+    encoded_output_path = Path(encoded_output.path)
+
+    encoded_output_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created encoded phenotypes output directory: {encoded_output_path}")
+
+    phenotype_mapper_script = project_files_path / "phenotype_mapper.py"
+    if not phenotype_mapper_script.is_file():
+        raise Exception(f"Phenotype mapper script not found at {phenotype_mapper_script}")
+
+    print(f"Found phenotype mapper script: {phenotype_mapper_script}")
+
+    phenotypes_file = pharmcat_results_path / "phenotypes.csv"
+    if not phenotypes_file.is_file():
+        # Try to find phenotypes.csv in subdirectories
+        phenotypes_files = list(pharmcat_results_path.glob("**/phenotypes.csv"))
+        if phenotypes_files:
+            phenotypes_file = phenotypes_files[0]
+            print(f"Found phenotypes.csv in subdirectory: {phenotypes_file}")
+        else:
+            raise Exception(f"Phenotypes CSV file not found at {phenotypes_file} or subdirectories")
+
+    output_file = encoded_output_path / "phenotypes_encoded.csv"
+
+    command = [
+        "python", str(phenotype_mapper_script),
+        "--input_csv", str(phenotypes_file),
+        "--output_csv", str(output_file)
+    ]
+
+    print(f"\nRunning phenotype mapping: {' '.join(command)}")
+
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("Phenotype mapping completed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during phenotype mapping: {e.stdout}\n{e.stderr}")
+        raise Exception("Phenotype mapping failed.")
+
+    if not output_file.is_file():
+        raise Exception(f"Expected encoded phenotypes file not found at {output_file}")
+
+    print(f"Phenotype mapping successful. Output saved to {output_file}")
+
+
+@kfp.dsl.component(
+    base_image="python:3.10-slim",
+    packages_to_install=["pandas", "numpy", "scipy", "scikit-learn"]
+)
+def run_explainer(
+        project_files: Input[Model],
+        csv_data: Input[Dataset],
+        encoded_phenotypes: Input[Dataset],
+        explainer_results: Output[Dataset],
+        sensitivity: float = 0.7
+):
+    import subprocess
+    import os
+    from pathlib import Path
+
+    project_files_path = Path(project_files.path)
+    csv_data_path = Path(csv_data.path)
+    encoded_phenotypes_path = Path(encoded_phenotypes.path)
+    explainer_results_path = Path(explainer_results.path)
+
+    explainer_results_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created explainer results directory: {explainer_results_path}")
+
+    explainer_script = project_files_path / "explainer.py"
+    if not explainer_script.is_file():
+        raise Exception(f"Explainer script not found at {explainer_script}")
+
+    print(f"Found explainer script: {explainer_script}")
+
+    input_file = csv_data_path / "encoded.csv"
+    if not input_file.is_file():
+        # Try to find encoded.csv in subdirectories
+        input_files = list(csv_data_path.glob("**/encoded.csv"))
+        if input_files:
+            input_file = input_files[0]
+            print(f"Found encoded.csv in subdirectory: {input_file}")
+        else:
+            raise Exception(f"Encoded CSV file not found at {input_file} or subdirectories")
+
+    output_file = encoded_phenotypes_path / "phenotypes_encoded.csv"
+    if not output_file.is_file():
+        # Try to find phenotypes_encoded.csv in subdirectories
+        output_files = list(encoded_phenotypes_path.glob("**/phenotypes_encoded.csv"))
+        if output_files:
+            output_file = output_files[0]
+            print(f"Found phenotypes_encoded.csv in subdirectory: {output_file}")
+        else:
+            raise Exception(f"Encoded phenotypes file not found at {output_file} or subdirectories")
+
+    results_dir = explainer_results_path / "explainer_results"
+
+    command = [
+        "python", str(explainer_script),
+        "--input_file", str(input_file),
+        "--output_file", str(output_file),
+        "--results_dir", str(results_dir),
+        "--sensitivity", str(sensitivity)
+    ]
+
+    print(f"\nRunning explainer analysis: {' '.join(command)}")
+
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("Explainer analysis completed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during explainer analysis: {e.stdout}\n{e.stderr}")
+        raise Exception("Explainer analysis failed.")
+
+    # Verify results
+    json_files = list(results_dir.glob("*.json"))
+    if not json_files:
+        raise Exception(f"No result JSON files found in {results_dir}")
+
+    print(f"Explainer analysis successful. Results saved to {results_dir}")
+
+
+@kfp.dsl.component(
+    base_image="python:3.10-slim",
+    packages_to_install=["pandas"]
+)
+def fairness_bias_analyzer(
         project_files: Input[Model],
         demographic_data: Input[Dataset],
         pharmcat_results: Input[Dataset],
+        groundtruth_data: Input[Dataset],
         fairness_results: Output[Dataset]
 ):
     import subprocess
+    import os
     from pathlib import Path
+
     project_files_path = Path(project_files.path)
     demographic_data_path = Path(demographic_data.path)
     pharmcat_results_path = Path(pharmcat_results.path)
+    groundtruth_data_path = Path(groundtruth_data.path)
     fairness_results_path = Path(fairness_results.path)
+
     fairness_results_path.mkdir(parents=True, exist_ok=True)
-    print(f"Ensured Fairness results directory exists: {fairness_results_path}")
-    fairness_script = project_files_path / "pgx_fairness_analyzer.py"
-    if not fairness_script.is_file(): raise Exception(f"Fairness analyzer script not found at {fairness_script}")
-    print(f"Found Fairness script: {fairness_script}")
-    req_file = project_files_path / "requirements.txt"
-    if req_file.is_file():
-        print(f"Installing requirements from {req_file}...")
-        try:
-            subprocess.run(["pip", "install", "-r", str(req_file)], check=True, capture_output=True, text=True)
-            print("Requirements installed.")
-        except subprocess.CalledProcessError as e:
-            print(f"Error installing requirements: {e.stderr}")
-            raise Exception("Failed to install requirements for Fairness analysis.")
-    else:
-        print("No requirements.txt found in project_files, skipping pip install.")
-    demo_file_path = demographic_data_path / "pgx_cohort.csv"
-    if not demo_file_path.is_file():
-        print(f"pgx_cohort.csv not found directly in {demographic_data_path}, searching recursively...")
-        found_files = list(demographic_data_path.rglob("pgx_cohort.csv"))
-        if not found_files: raise Exception(f"Demographic file pgx_cohort.csv not found within {demographic_data_path}")
-        demo_file_path = found_files[0]
-    print(f"Using demographic file: {demo_file_path}")
-    phenotypes_csv = pharmcat_results_path / "phenotypes.csv"
-    if not phenotypes_csv.is_file(): raise Exception(
-        f"Phenotypes CSV not found at {phenotypes_csv}. Cannot run Fairness analysis.")
-    print(f"Found phenotypes file: {phenotypes_csv}")
+    print(f"Created fairness results directory: {fairness_results_path}")
+
+    fairness_script = project_files_path / "fairness_bias_analyzer.py"
+    if not fairness_script.is_file():
+        raise Exception(f"Fairness analyzer script not found at {fairness_script}")
+
+    print(f"Found fairness analyzer script: {fairness_script}")
+
+    # Find required input files
+    population_codes_file = demographic_data_path / "population_codes.md"
+    if not population_codes_file.is_file():
+        population_codes_files = list(demographic_data_path.glob("**/population_codes.md"))
+        if population_codes_files:
+            population_codes_file = population_codes_files[0]
+        else:
+            raise Exception(f"Population codes file not found at {population_codes_file} or subdirectories")
+
+    cohort_file = demographic_data_path / "pgx_cohort.csv"
+    if not cohort_file.is_file():
+        cohort_files = list(demographic_data_path.glob("**/pgx_cohort.csv"))
+        if cohort_files:
+            cohort_file = cohort_files[0]
+        else:
+            raise Exception(f"Cohort file not found at {cohort_file} or subdirectories")
+
+    phenotypes_file = pharmcat_results_path / "phenotypes.csv"
+    if not phenotypes_file.is_file():
+        phenotypes_files = list(pharmcat_results_path.glob("**/phenotypes.csv"))
+        if phenotypes_files:
+            phenotypes_file = phenotypes_files[0]
+        else:
+            raise Exception(f"Phenotypes file not found at {phenotypes_file} or subdirectories")
+
+    groundtruth_file = groundtruth_data_path / "groundtruth_phenotype_filtered.csv"
+    if not groundtruth_file.is_file():
+        groundtruth_files = list(groundtruth_data_path.glob("**/groundtruth_phenotype_filtered.csv"))
+        if groundtruth_files:
+            groundtruth_file = groundtruth_files[0]
+        else:
+            raise Exception(f"Groundtruth file not found at {groundtruth_file} or subdirectories")
+
+    output_file = fairness_results_path / "fairness_analysis.json"
+
     command = [
         "python", str(fairness_script),
-        "--demographic_file", str(demo_file_path),
-        "--phenotypes_file", str(phenotypes_csv),
-        "--output_dir", str(fairness_results_path)
-    ]
-    print(f"\nRunning Fairness analysis command: {' '.join(command)}")
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
-        print("Fairness analysis script executed successfully.")
-    except subprocess.CalledProcessError as e:
-        print("\n--- Error running Fairness analysis script ---")
-        print(f"Exit Code: {e.returncode}")
-        print(f"stdout:\n{e.stdout}")
-        print(f"stderr:\n{e.stderr}")
-        raise Exception("Fairness analysis script failed.")
-    except Exception as e:
-        print(f"\nAn unexpected error occurred during Fairness analysis: {e}")
-        raise
-    print("\nVerifying Fairness analysis output...")
-    expected_json = fairness_results_path / "overall_fairness_report.json"
-    if not expected_json.is_file():
-        expected_subdir = fairness_results_path / "pgx_fairness_results"
-        if expected_subdir.is_dir():
-            print(f"Found directory {expected_subdir}, checking for report inside...")
-            expected_json_in_subdir = expected_subdir / "overall_fairness_report.json"
-            if not expected_json_in_subdir.is_file():
-                raise Exception(
-                    f"Fairness analysis failed: overall_fairness_report.json not found in {expected_subdir}")
-            else:
-                print(f"Found expected output file in subdirectory: {expected_json_in_subdir}")
-        else:
-            raise Exception("Fairness analysis failed: overall_fairness_report.json not found")
-    else:
-        print(f"Found expected output file: {expected_json}")
-    print("\nFairness analysis component completed successfully.")
-
-
-@kfp.dsl.component(
-    base_image="python:3.10-slim",
-    packages_to_install=["matplotlib", "numpy", "pandas", "networkx", "seaborn"]
-)
-def visualization_analysis(
-        project_files: Input[Model],
-        analysis_results: Input[Dataset],
-        visualization_results: Output[Dataset]
-):
-    import subprocess
-    from pathlib import Path
-
-    project_files_path = Path(project_files.path)
-    analysis_results_path = Path(analysis_results.path)
-    visualization_results_path = Path(visualization_results.path)
-    visualization_results_path.mkdir(parents=True, exist_ok=True)
-
-    print(f"Ensured Visualization results directory exists: {visualization_results_path}")
-
-    visualizer_script = project_files_path / "pgx_visualizer.py"
-    if not visualizer_script.is_file():
-        raise Exception(f"Visualizer script not found at {visualizer_script}")
-
-    print(f"Found Visualizer script: {visualizer_script}")
-
-    # Find the required input files in the analysis results directory
-    pgx_results_file = analysis_results_path / "pgx_results.json"
-    counterfactual_file = analysis_results_path / "counterfactual_analysis.json"
-    rules_file = analysis_results_path / "rule_extraction.json"
-    decision_trees_file = analysis_results_path / "decision_trees.json"
-
-    command = [
-        "python", str(visualizer_script),
-        "--output_dir", str(visualization_results_path)
+        "--population-codes", str(population_codes_file),
+        "--cohort", str(cohort_file),
+        "--phenotypes", str(phenotypes_file),
+        "--groundtruth", str(groundtruth_file),
+        "--output", str(output_file)
     ]
 
-    if pgx_results_file.is_file():
-        command.extend(["--pgx_results", str(pgx_results_file)])
-        print(f"Found PGx results file: {pgx_results_file}")
-    else:
-        print(f"Warning: PGx results file not found at {pgx_results_file}")
-
-    if counterfactual_file.is_file():
-        command.extend(["--counterfactual", str(counterfactual_file)])
-        print(f"Found counterfactual analysis file: {counterfactual_file}")
-    else:
-        print(f"Warning: Counterfactual analysis file not found at {counterfactual_file}")
-
-    if rules_file.is_file():
-        command.extend(["--rules", str(rules_file)])
-        print(f"Found rule extraction file: {rules_file}")
-    else:
-        print(f"Warning: Rule extraction file not found at {rules_file}")
-
-    if decision_trees_file.is_file():
-        command.extend(["--decision_trees", str(decision_trees_file)])
-        print(f"Found decision trees file: {decision_trees_file}")
-    else:
-        print(f"Warning: Decision trees file not found at {decision_trees_file}")
-
-    print(f"\nRunning Visualization analysis command: {' '.join(command)}")
+    print(f"\nRunning fairness analysis: {' '.join(command)}")
 
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8')
-        print("Visualization script executed successfully.")
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("Fairness analysis completed successfully.")
     except subprocess.CalledProcessError as e:
-        print("\n--- Error running Visualization script ---")
-        print(f"Exit Code: {e.returncode}")
-        print(f"stdout:\n{e.stdout}")
-        print(f"stderr:\n{e.stderr}")
-        raise Exception("Visualization script failed.")
-    except Exception as e:
-        print(f"\nAn unexpected error occurred during visualization: {e}")
-        raise
+        print(f"Error during fairness analysis: {e.stdout}\n{e.stderr}")
+        raise Exception("Fairness analysis failed.")
 
-    print("\nVerifying visualization output...")
-    expected_summary = visualization_results_path / "pgx_summary_dashboard.png"
-    if not expected_summary.is_file():
-        print(f"Warning: Expected summary dashboard not found at {expected_summary}")
-    else:
-        print(f"Found summary dashboard: {expected_summary}")
+    if not output_file.is_file():
+        raise Exception(f"Expected fairness analysis file not found at {output_file}")
 
-    dashboards = list(visualization_results_path.glob("dashboard_*.png"))
-    print(f"Found {len(dashboards)} gene-specific dashboards")
-
-    print("\nVisualization component completed successfully.")
+    print(f"Fairness analysis successful. Output saved to {output_file}")
 
 
 @kfp.dsl.pipeline(
-    name="PharmCAT PGx Analysis Pipeline (Dockerized)",
-    description="Pipeline using pre-built Docker image for PharmCAT analysis"
+    name="PharmCAT PGx Analysis Pipeline",
+    description="Pipeline for pharmacogenomic analysis using PharmCAT and SHAP"
 )
 def pharmcat_pipeline(
         github_repo_url: str,
         branch: str = "main",
-        sensitivity: float = 0.7,  # Control the blend between explanation methods
-        method: str = None,
-        max_samples: int = -1,  # -1 means analyze all samples
-        run_counterfactual: bool = True,  # Run counterfactual analysis
-        run_rule_extraction: bool = True,  # Run rule extraction analysis
-        top_k: int = 10  # Number of top features for counterfactual analysis
+        sensitivity: float = 0.7
 ):
     download_task = download_project(
         github_repo_url=github_repo_url,
@@ -493,45 +448,51 @@ def pharmcat_pipeline(
     pharmcat_task.set_memory_request("4G")
     pharmcat_task.set_memory_limit("8G")
 
-    analysis_task = explainability_analysis(
+    vcf_to_csv_task = vcf_to_csv(
         project_files=download_task.outputs["project_files"],
-        input_data=download_task.outputs["input_data"],
-        pharmcat_results=pharmcat_task.outputs["result_folder"],
-        sensitivity=sensitivity,
-        method=method,
-        max_samples=max_samples,
-        run_counterfactual=run_counterfactual,
-        run_rule_extraction=run_rule_extraction,
-        top_k=top_k
+        input_data=download_task.outputs["input_data"]
     )
-    analysis_task.set_caching_options(False)
-    analysis_task.set_cpu_request("2")
-    analysis_task.set_cpu_limit("4")
-    analysis_task.set_memory_request("4G")
-    analysis_task.set_memory_limit("8G")
+    vcf_to_csv_task.set_caching_options(False)
+    vcf_to_csv_task.set_cpu_request("1")
+    vcf_to_csv_task.set_cpu_limit("2")
+    vcf_to_csv_task.set_memory_request("2G")
+    vcf_to_csv_task.set_memory_limit("4G")
 
-    fairness_task = fairness_analysis(
+    phenotype_mapper_task = phenotype_mapper(
         project_files=download_task.outputs["project_files"],
-        demographic_data=download_task.outputs["demographic_data"],
         pharmcat_results=pharmcat_task.outputs["result_folder"]
     )
-    fairness_task.set_caching_options(False)
-    fairness_task.set_cpu_request("2")
-    fairness_task.set_cpu_limit("4")
-    fairness_task.set_memory_request("4G")
-    fairness_task.set_memory_limit("8G")
+    phenotype_mapper_task.set_caching_options(False)
+    phenotype_mapper_task.set_cpu_request("1")
+    phenotype_mapper_task.set_cpu_limit("2")
+    phenotype_mapper_task.set_memory_request("2G")
+    phenotype_mapper_task.set_memory_limit("4G")
 
-    visualization_task = visualization_analysis(
+    explainer_task = run_explainer(
         project_files=download_task.outputs["project_files"],
-        analysis_results=analysis_task.outputs["results"]
+        csv_data=vcf_to_csv_task.outputs["csv_output"],
+        encoded_phenotypes=phenotype_mapper_task.outputs["encoded_output"],
+        sensitivity=sensitivity
     )
-    visualization_task.set_caching_options(False)
-    visualization_task.set_cpu_request("2")
-    visualization_task.set_cpu_limit("4")
-    visualization_task.set_memory_request("4G")
-    visualization_task.set_memory_limit("8G")
+    explainer_task.set_caching_options(False)
+    explainer_task.set_cpu_request("2")
+    explainer_task.set_cpu_limit("4")
+    explainer_task.set_memory_request("4G")
+    explainer_task.set_memory_limit("8G")
+
+    fairness_task = fairness_bias_analyzer(
+        project_files=download_task.outputs["project_files"],
+        demographic_data=download_task.outputs["demographic_data"],
+        pharmcat_results=pharmcat_task.outputs["result_folder"],
+        groundtruth_data=download_task.outputs["groundtruth_data"]
+    )
+    fairness_task.set_caching_options(False)
+    fairness_task.set_cpu_request("1")
+    fairness_task.set_cpu_limit("2")
+    fairness_task.set_memory_request("2G")
+    fairness_task.set_memory_limit("4G")
 
 
 if __name__ == "__main__":
     compiler = kfp.compiler.Compiler()
-    compiler.compile(pipeline_func=pharmcat_pipeline, package_path="pharmcat_pipeline_.yaml")
+    compiler.compile(pipeline_func=pharmcat_pipeline, package_path="pharmcat_pipeline.yaml")
