@@ -5,6 +5,17 @@ import numpy as np
 import re
 from pathlib import Path
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
+        return super(NumpyEncoder, self).default(obj)
 
 def parse_population_codes(population_codes_file):
     with open(population_codes_file, 'r') as f:
@@ -87,8 +98,8 @@ def calculate_fairness_metrics(data, target_genes, population_info):
 
         gene_metrics = {
             'overall': {
-                'sample_count': len(data),
-                'phenotype_distribution': data[gene].value_counts().to_dict()
+                'sample_count': int(len(data)),  # Convert numpy.int64 to Python int
+                'phenotype_distribution': {k: int(v) for k, v in data[gene].value_counts().to_dict().items()}  # Convert values to Python int
             },
             'demographic_disparity': {}
         }
@@ -105,14 +116,14 @@ def calculate_fairness_metrics(data, target_genes, population_info):
             phenotypes = data[gene].dropna().unique()
 
             for phenotype in phenotypes:
-                overall_rate = (data[gene] == phenotype).mean()
+                overall_rate = float((data[gene] == phenotype).mean())  # Convert numpy.float64 to Python float
                 phenotype_metrics = {
-                    'overall_rate': float(overall_rate),
+                    'overall_rate': overall_rate,
                     'group_rates': {},
                     'disparities': []
                 }
 
-                max_diff = 0
+                max_diff = 0.0
                 min_rate = 1.0
                 max_rate = 0.0
 
@@ -123,10 +134,10 @@ def calculate_fairness_metrics(data, target_genes, population_info):
                     if group_size < 5:
                         continue
 
-                    group_rate = (group_data[gene] == phenotype).mean()
+                    group_rate = float((group_data[gene] == phenotype).mean())  # Convert numpy.float64 to Python float
                     phenotype_metrics['group_rates'][str(group)] = {
-                        'rate': float(group_rate),
-                        'sample_size': int(group_size)
+                        'rate': group_rate,
+                        'sample_size': int(group_size)  # Convert numpy.int64 to Python int
                     }
 
                     diff = abs(group_rate - overall_rate)
@@ -161,20 +172,20 @@ def calculate_fairness_metrics(data, target_genes, population_info):
                             disparity = {
                                 'group1': group1,
                                 'group2': group2,
-                                'rate1': float(rate1),
-                                'rate2': float(rate2),
-                                'difference': float(diff),
-                                'ratio': float(ratio),
-                                'is_significant': diff >= 0.2 or ratio <= 0.5
+                                'rate1': rate1,
+                                'rate2': rate2,
+                                'difference': diff,
+                                'ratio': ratio,
+                                'is_significant': bool(diff >= 0.2 or ratio <= 0.5)  # Convert numpy.bool_ to Python bool
                             }
 
                             phenotype_metrics['disparities'].append(disparity)
 
-                phenotype_metrics['max_disparity'] = float(max_diff)
-                phenotype_metrics['disparity_ratio'] = float(disparity_ratio)
-                phenotype_metrics['has_disparity'] = max_diff >= 0.2 or disparity_ratio <= 0.5
+                phenotype_metrics['max_disparity'] = float(max_diff)  # Convert numpy.float64 to Python float
+                phenotype_metrics['disparity_ratio'] = float(disparity_ratio)  # Convert numpy.float64 to Python float
+                phenotype_metrics['has_disparity'] = bool(max_diff >= 0.2 or disparity_ratio <= 0.5)  # Convert numpy.bool_ to Python bool
 
-                group_metrics[phenotype] = phenotype_metrics
+                group_metrics[str(phenotype)] = phenotype_metrics
 
             gene_metrics['demographic_disparity'][demographic] = group_metrics
 
