@@ -85,128 +85,57 @@ def mutual_information_analysis(input_df, output_df):
     return mi_scores
 
 
-def feature_permutation_analysis(input_df, output_df, n_permutations=20):
-    if 'PATIENT_ID' in input_df.columns:
-        input_numeric = input_df.drop(columns=['PATIENT_ID'])
-    else:
-        input_numeric = input_df
-
-    input_numeric = input_numeric.select_dtypes(include=[np.number])
-
-    if 'Sample ID' in output_df.columns:
-        output_numeric = output_df.drop(columns=['Sample ID'])
-    else:
-        output_numeric = output_df
-
-    baseline_concordance = calculate_prediction_concordance(input_numeric, output_numeric)
-    importance_scores = defaultdict(dict)
-
-    for input_col in input_numeric.columns:
-        permutation_concordances = []
-
-        for _ in range(n_permutations):
-            permuted_input = input_numeric.copy()
-            permuted_input[input_col] = np.random.permutation(permuted_input[input_col].values)
-
-            perm_concordance = calculate_prediction_concordance(permuted_input, output_numeric)
-            permutation_concordances.append(perm_concordance)
-
-        mean_perm_concordance = np.mean(permutation_concordances)
-        importance = baseline_concordance - mean_perm_concordance
-
-        for output_col in output_numeric.columns:
-            importance_scores[output_col][input_col] = importance
-
-    return importance_scores
-
-
-def calculate_prediction_concordance(input_df, output_df):
-    return np.mean([output_df[col].nunique() == 1 for col in output_df.columns])
-
-
-def run_feature_importance_analysis(input_file, output_file):
+def run_analysis(input_file, output_file, method):
     print("Loading data...")
     input_df, output_df = load_data(input_file, output_file)
     print(f"Loaded data with {len(input_df)} rows")
 
-    print("Running correlation analysis...")
-    correlation_results = correlation_analysis(input_df, output_df)
-
-    print("Running mutual information analysis...")
-    mi_results = mutual_information_analysis(input_df, output_df)
-
-    print("Running feature permutation analysis...")
-    permutation_results = feature_permutation_analysis(input_df, output_df)
-
-    # Combine all results for overall importance
-    all_scores = defaultdict(lambda: defaultdict(dict))
-
-    for output_col in correlation_results:
-        for input_col in correlation_results[output_col]:
-            corr, p_value = correlation_results[output_col][input_col]
-            all_scores[output_col][input_col]["correlation"] = corr
-            all_scores[output_col][input_col]["p_value"] = p_value
-            all_scores[output_col][input_col]["abs_correlation"] = abs(corr)
-
-    for output_col in mi_results:
-        for input_col in mi_results[output_col]:
-            all_scores[output_col][input_col]["mutual_info"] = mi_results[output_col][input_col]
-
-    for output_col in permutation_results:
-        for input_col in permutation_results[output_col]:
-            all_scores[output_col][input_col]["permutation"] = permutation_results[output_col][input_col]
-
-    return all_scores
+    if method == "correlation":
+        print("Running correlation analysis...")
+        return correlation_analysis(input_df, output_df)
+    elif method == "mutual_information":
+        print("Running mutual information analysis...")
+        return mutual_information_analysis(input_df, output_df)
+    else:
+        raise ValueError(f"Unknown method: {method}")
 
 
-def save_results(all_scores, output_path):
+def save_results(results, output_path, method):
     os.makedirs(output_path, exist_ok=True)
 
-    # Prepare detailed data for comprehensive analysis file
-    detailed_data = []
+    if method == "correlation":
+        result_df = pd.DataFrame(columns=["Gene", "Feature", "Correlation", "P_Value", "Abs_Correlation"])
 
-    for output_col, features in all_scores.items():
-        for input_col, metrics in features.items():
-            # Calculate combined importance score (weighted average of normalized metrics)
-            abs_corr = metrics.get("abs_correlation", 0)
-            mi_score = metrics.get("mutual_info", 0)
-            perm_score = metrics.get("permutation", 0)
+        for gene, features in results.items():
+            for feature, (correlation, p_value) in features.items():
+                result_df = pd.concat([result_df, pd.DataFrame({
+                    "Gene": [gene],
+                    "Feature": [feature],
+                    "Correlation": [correlation],
+                    "P_Value": [p_value],
+                    "Abs_Correlation": [abs(correlation)]
+                })])
 
-            # Simple weighted average for combined importance
-            combined_score = (0.4 * abs_corr +
-                              0.4 * mi_score +
-                              0.2 * perm_score)
+        output_file = os.path.join(output_path, "correlation_analysis.csv")
+        result_df = result_df.sort_values(by=["Gene", "Abs_Correlation"], ascending=[True, False])
+        result_df.to_csv(output_file, index=False)
 
-            detailed_data.append({
-                "Gene": output_col,
-                "Feature": input_col,
-                "Combined_Importance": combined_score,
-                "Correlation": metrics.get("correlation", 0),
-                "P_Value": metrics.get("p_value", 1.0),
-                "Mutual_Information": metrics.get("mutual_info", 0),
-                "Permutation_Importance": metrics.get("permutation", 0)
-            })
+    elif method == "mutual_information":
+        result_df = pd.DataFrame(columns=["Gene", "Feature", "Importance"])
 
-    # Create comprehensive feature importance file
-    comprehensive_df = pd.DataFrame(detailed_data)
-    comprehensive_df.to_csv(os.path.join(output_path, 'comprehensive_feature_importance.csv'), index=False)
+        for gene, features in results.items():
+            for feature, importance in features.items():
+                result_df = pd.concat([result_df, pd.DataFrame({
+                    "Gene": [gene],
+                    "Feature": [feature],
+                    "Importance": [importance]
+                })])
 
-    # Create a summary file with top features per gene
-    summary_data = []
-    for gene, gene_data in comprehensive_df.groupby("Gene"):
-        # Get top 10 features per gene
-        top_features = gene_data.sort_values("Combined_Importance", ascending=False).head(10)
+        output_file = os.path.join(output_path, "mutual_information_analysis.csv")
+        result_df = result_df.sort_values(by=["Gene", "Importance"], ascending=[True, False])
+        result_df.to_csv(output_file, index=False)
 
-        # Add rank information
-        top_features = top_features.copy()
-        top_features["Rank"] = range(1, len(top_features) + 1)
-
-        summary_data.append(top_features[["Gene", "Rank", "Feature", "Combined_Importance", "Correlation", "P_Value"]])
-
-    summary_df = pd.concat(summary_data)
-    summary_df.to_csv(os.path.join(output_path, 'top_features_summary.csv'), index=False)
-
-    return comprehensive_df, summary_df
+    return result_df
 
 
 def main():
@@ -214,21 +143,23 @@ def main():
     parser.add_argument('--input_file', required=True, help='Input file with encoded genetic data')
     parser.add_argument('--output_file', required=True, help='Output file with encoded phenotypes')
     parser.add_argument('--results_dir', default='explainer_results', help='Directory to save results')
+    parser.add_argument('--method', required=True, choices=['correlation', 'mutual_information'],
+                        help='Analysis method to use')
     args = parser.parse_args()
 
-    # Ensure results directory exists
-    os.makedirs(args.results_dir, exist_ok=True)
+    results = run_analysis(args.input_file, args.output_file, args.method)
+    result_df = save_results(results, args.results_dir, args.method)
 
-    all_scores = run_feature_importance_analysis(args.input_file, args.output_file)
-    comprehensive_df, summary_df = save_results(all_scores, args.results_dir)
+    print(f"Analysis complete using {args.method} method. Results saved to {args.results_dir}")
 
-    print("\nAnalysis complete! Results saved to", args.results_dir)
-    print("\nTop features summary saved as 'top_features_summary.csv'")
-    print("Complete feature importance metrics saved as 'comprehensive_feature_importance.csv'")
-
-    print("\nTop 5 features by importance:")
-    top_overall = comprehensive_df.sort_values("Combined_Importance", ascending=False).head(5)
-    print(top_overall[["Gene", "Feature", "Combined_Importance"]].to_string(index=False))
+    if args.method == "correlation":
+        top_features = result_df.sort_values("Abs_Correlation", ascending=False).head(10)
+        print("\nTop 10 features by correlation magnitude:")
+        print(top_features[["Gene", "Feature", "Correlation", "P_Value"]].to_string(index=False))
+    else:
+        top_features = result_df.sort_values("Importance", ascending=False).head(10)
+        print("\nTop 10 features by mutual information:")
+        print(top_features[["Gene", "Feature", "Importance"]].to_string(index=False))
 
 
 if __name__ == "__main__":
