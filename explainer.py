@@ -85,19 +85,22 @@ def mutual_information_analysis(input_df, output_df):
     return mi_scores
 
 
-def run_analysis(input_file, output_file, method):
+def run_analysis(input_file, output_file, sensitivity):
     print("Loading data...")
     input_df, output_df = load_data(input_file, output_file)
     print(f"Loaded data with {len(input_df)} rows")
 
+    # Determine method based on sensitivity
+    method = "correlation" if sensitivity >= 0.5 else "mutual_information"
+
+    print(f"Using method: {method} based on sensitivity: {sensitivity}")
+
     if method == "correlation":
         print("Running correlation analysis...")
-        return correlation_analysis(input_df, output_df)
-    elif method == "mutual_information":
-        print("Running mutual information analysis...")
-        return mutual_information_analysis(input_df, output_df)
+        return correlation_analysis(input_df, output_df), method
     else:
-        raise ValueError(f"Unknown method: {method}")
+        print("Running mutual information analysis...")
+        return mutual_information_analysis(input_df, output_df), method
 
 
 def save_results(results, output_path, method):
@@ -143,16 +146,19 @@ def main():
     parser.add_argument('--input_file', required=True, help='Input file with encoded genetic data')
     parser.add_argument('--output_file', required=True, help='Output file with encoded phenotypes')
     parser.add_argument('--results_dir', default='explainer_results', help='Directory to save results')
-    parser.add_argument('--method', required=True, choices=['correlation', 'mutual_information'],
-                        help='Analysis method to use')
+    parser.add_argument('--sensitivity', type=float, default=0.7,
+                        help='Sensitivity value (0-1): <0.5 uses mutual_information, >=0.5 uses correlation')
     args = parser.parse_args()
 
-    results = run_analysis(args.input_file, args.output_file, args.method)
-    result_df = save_results(results, args.results_dir, args.method)
+    if not 0 <= args.sensitivity <= 1:
+        raise ValueError("Sensitivity must be between 0 and 1")
 
-    print(f"Analysis complete using {args.method} method. Results saved to {args.results_dir}")
+    results, method = run_analysis(args.input_file, args.output_file, args.sensitivity)
+    result_df = save_results(results, args.results_dir, method)
 
-    if args.method == "correlation":
+    print(f"Analysis complete using {method} method. Results saved to {args.results_dir}")
+
+    if method == "correlation":
         top_features = result_df.sort_values("Abs_Correlation", ascending=False).head(10)
         print("\nTop 10 features by correlation magnitude:")
         print(top_features[["Gene", "Feature", "Correlation", "P_Value"]].to_string(index=False))
