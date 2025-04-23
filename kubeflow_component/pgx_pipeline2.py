@@ -61,7 +61,6 @@ def download_project(
             "vcf_to_csv.py",
             "phenotype_mapper.py",
             "explainer.py",
-            "explainer_visualizer.py",
             "fairness_bias_analyzer.py",
             "requirements.txt"
         ],
@@ -326,69 +325,6 @@ def run_explainer(
 
 @kfp.dsl.component(
     base_image="python:3.10-slim",
-    packages_to_install=["pandas", "matplotlib", "seaborn"]
-)
-def visualize_results(
-        project_files: Input[Model],
-        explainer_results: Input[Dataset],
-        visualization_output: Output[Dataset]
-):
-    import subprocess
-    import os
-    from pathlib import Path
-
-    project_files_path = Path(project_files.path)
-    explainer_results_path = Path(explainer_results.path)
-    visualization_output_path = Path(visualization_output.path)
-
-    visualization_output_path.mkdir(parents=True, exist_ok=True)
-    print(f"Created visualization output directory: {visualization_output_path}")
-
-    visualizer_script = project_files_path / "explainer_visualizer.py"
-    if not visualizer_script.is_file():
-        raise Exception(f"Visualizer script not found at {visualizer_script}")
-
-    print(f"Found visualizer script: {visualizer_script}")
-
-    # Find the result JSON files
-    results_dir = explainer_results_path / "explainer_results"
-    if not results_dir.is_dir():
-        # Try to find explainer_results in parent directory
-        results_dir = explainer_results_path
-
-    # Look for either correlation or mutual information results
-    json_files = list(results_dir.glob("*.json"))
-    if not json_files:
-        raise Exception(f"No result JSON files found in {results_dir}")
-
-    input_file = json_files[0]  # Use the first JSON file found
-    print(f"Using input file for visualization: {input_file}")
-
-    command = [
-        "python", str(visualizer_script),
-        "--input_file", str(input_file),
-        "--output_dir", str(visualization_output_path)
-    ]
-
-    print(f"\nRunning visualization: {' '.join(command)}")
-
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        print("Visualization completed successfully.")
-    except subprocess.CalledProcessError as e:
-        print(f"Error during visualization: {e.stdout}\n{e.stderr}")
-        raise Exception("Visualization failed.")
-
-    # Verify results
-    image_files = list(visualization_output_path.glob("*.png"))
-    if not image_files:
-        raise Exception(f"No visualization images found in {visualization_output_path}")
-
-    print(f"Visualization successful. Images saved to {visualization_output_path}")
-
-
-@kfp.dsl.component(
-    base_image="python:3.10-slim",
     packages_to_install=["pandas"]
 )
 def fairness_bias_analyzer(
@@ -520,16 +456,6 @@ def pharmcat_pipeline(
     explainer_task.set_cpu_limit("4")
     explainer_task.set_memory_request("4G")
     explainer_task.set_memory_limit("8G")
-
-    visualize_task = visualize_results(
-        project_files=download_task.outputs["project_files"],
-        explainer_results=explainer_task.outputs["explainer_results"]
-    )
-    visualize_task.set_caching_options(False)
-    visualize_task.set_cpu_request("1")
-    visualize_task.set_cpu_limit("2")
-    visualize_task.set_memory_request("2G")
-    visualize_task.set_memory_limit("4G")
 
     fairness_task = fairness_bias_analyzer(
         project_files=download_task.outputs["project_files"],
