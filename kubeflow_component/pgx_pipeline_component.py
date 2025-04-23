@@ -145,7 +145,8 @@ def pharmcat_analysis_docker(
 ):
     command_str = f"mkdir -p '{result_folder.path}' && python3 -u /scripts/pharmcat_folder_processor.py --input_folder '{input_folder.path}' --result_folder '{result_folder.path}'"
     return dsl.ContainerSpec(
-        image="<your_docker_pharmcat_image>",  # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
+        image="<your_docker_pharmcat_image>",
+        # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
         command=["sh", "-c"],
         args=[command_str]
     )
@@ -161,7 +162,6 @@ def vcf_to_csv(
         csv_output: Output[Dataset]
 ):
     import subprocess
-    import os
     from pathlib import Path
 
     project_files_path = Path(project_files.path)
@@ -210,7 +210,6 @@ def phenotype_mapper(
         encoded_output: Output[Dataset]
 ):
     import subprocess
-    import os
     from pathlib import Path
 
     project_files_path = Path(project_files.path)
@@ -271,7 +270,6 @@ def run_explainer(
         sensitivity: float = 0.7
 ):
     import subprocess
-    import os
     from pathlib import Path
 
     project_files_path = Path(project_files.path)
@@ -347,7 +345,6 @@ def fairness_bias_analyzer(
         fairness_results: Output[Dataset]
 ):
     import subprocess
-    import os
     from pathlib import Path
 
     project_files_path = Path(project_files.path)
