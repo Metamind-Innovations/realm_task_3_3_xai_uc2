@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import argparse
+import json
 from scipy.stats import pointbiserialr, spearmanr
 from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
 from collections import defaultdict
@@ -90,7 +91,6 @@ def run_analysis(input_file, output_file, sensitivity):
     input_df, output_df = load_data(input_file, output_file)
     print(f"Loaded data with {len(input_df)} rows")
 
-    # Determine method based on sensitivity
     method = "correlation" if sensitivity >= 0.5 else "mutual_information"
 
     print(f"Using method: {method} based on sensitivity: {sensitivity}")
@@ -119,9 +119,13 @@ def save_results(results, output_path, method):
                     "Abs_Correlation": [abs(correlation)]
                 })])
 
-        output_file = os.path.join(output_path, "correlation_analysis.csv")
         result_df = result_df.sort_values(by=["Gene", "Abs_Correlation"], ascending=[True, False])
-        result_df.to_csv(output_file, index=False)
+        output_file = os.path.join(output_path, "correlation_analysis.json")
+
+        # Convert to JSON
+        json_data = result_df.to_dict(orient='records')
+        with open(output_file, 'w') as f:
+            json.dump(json_data, f, indent=2)
 
     elif method == "mutual_information":
         result_df = pd.DataFrame(columns=["Gene", "Feature", "Importance"])
@@ -134,9 +138,15 @@ def save_results(results, output_path, method):
                     "Importance": [importance]
                 })])
 
-        output_file = os.path.join(output_path, "mutual_information_analysis.csv")
         result_df = result_df.sort_values(by=["Gene", "Importance"], ascending=[True, False])
-        result_df.to_csv(output_file, index=False)
+        output_file = os.path.join(output_path, "mutual_information_analysis.json")
+
+        # Convert to JSON
+        json_data = result_df.to_dict(orient='records')
+        with open(output_file, 'w') as f:
+            json.dump(json_data, f, indent=2)
+
+    print(f"Results saved as JSON to {output_file}")
 
     return result_df
 
@@ -156,7 +166,7 @@ def main():
     results, method = run_analysis(args.input_file, args.output_file, args.sensitivity)
     result_df = save_results(results, args.results_dir, method)
 
-    print(f"Analysis complete using {method} method. Results saved to {args.results_dir}")
+    print(f"Analysis complete using {method} method. Results saved to {args.results_dir} as JSON")
 
     if method == "correlation":
         top_features = result_df.sort_values("Abs_Correlation", ascending=False).head(10)
