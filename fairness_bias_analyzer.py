@@ -1,23 +1,9 @@
 import argparse
 import json
+import pandas as pd
+import numpy as np
 import re
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
-
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, (np.bool_, bool)):
-            return bool(obj)
-        return super(NumpyEncoder, self).default(obj)
 
 
 def parse_population_codes(population_codes_file):
@@ -52,39 +38,18 @@ def load_cohort_data(cohort_file):
 
 def load_phenotype_data(phenotypes_file):
     df = pd.read_csv(phenotypes_file)
-    if 'Sample ID' not in df.columns and 'Sample' in df.columns:
-        df = df.rename(columns={'Sample': 'Sample ID'})
-    elif 'Sample ID' not in df.columns and len(df.columns) > 0:
+    if 'Sample ID' not in df.columns and len(df.columns) > 0:
         df = df.rename(columns={df.columns[0]: 'Sample ID'})
     return df
 
 
-def load_groundtruth_data(groundtruth_file):
-    df = pd.read_csv(groundtruth_file)
-    if 'Sample ID' not in df.columns and 'Sample' in df.columns:
-        df = df.rename(columns={'Sample': 'Sample ID'})
-    elif 'Sample ID' not in df.columns and len(df.columns) > 0:
-        df = df.rename(columns={df.columns[0]: 'Sample ID'})
-    return df
-
-
-def merge_data(cohort_df, phenotype_df, groundtruth_df=None):
+def merge_data(cohort_df, phenotype_df):
     merged_df = pd.merge(
         phenotype_df,
         cohort_df,
         on='Sample ID',
         how='left'
     )
-
-    if groundtruth_df is not None:
-        merged_df = pd.merge(
-            merged_df,
-            groundtruth_df,
-            on='Sample ID',
-            how='left',
-            suffixes=('', '_groundtruth')
-        )
-
     return merged_df
 
 
@@ -113,142 +78,219 @@ def calculate_phenotype_distributions(data, target_genes):
     return distributions
 
 
-def calculate_equalized_odds(data, target_genes, demographics):
-    """
-    Calculate a simplified Equalized Odds metric for each gene and demographic group.
-    Equalized Odds measures whether error rates are similar across different demographic groups.
-    """
-    metrics = {}
-
-    for gene in target_genes:
-        gene_groundtruth = f"{gene}_groundtruth"
-
-        if gene not in data.columns or gene_groundtruth not in data.columns:
-            continue
-
-        gene_metrics = {}
-
-        for demographic in demographics:
-            if demographic not in data.columns:
-                continue
-
-            phenotype_metrics = {}
-            all_phenotypes = set(data[gene].dropna().unique()) | set(data[gene_groundtruth].dropna().unique())
-
-            for phenotype in all_phenotypes:
-                group_error_rates = {}
-                groups = data[demographic].dropna().unique()
-
-                for group in groups:
-                    group_data = data[data[demographic] == group]
-
-                    if len(group_data) < 5:  # Skip groups with too few samples
-                        continue
-
-                    # Calculate true positive rate (TPR) and false positive rate (FPR)
-                    true_pos = sum((group_data[gene] == phenotype) & (group_data[gene_groundtruth] == phenotype))
-                    false_pos = sum((group_data[gene] == phenotype) & (group_data[gene_groundtruth] != phenotype))
-
-                    actual_pos = sum(group_data[gene_groundtruth] == phenotype)
-                    actual_neg = sum(group_data[gene_groundtruth] != phenotype)
-
-                    tpr = true_pos / actual_pos if actual_pos > 0 else None
-                    fpr = false_pos / actual_neg if actual_neg > 0 else None
-
-                    group_error_rates[str(group)] = {
-                        "true_positive_rate": float(tpr) if tpr is not None else None,
-                        "false_positive_rate": float(fpr) if fpr is not None else None
-                    }
-
-                # Only include phenotypes with valid metrics for multiple groups
-                if len(group_error_rates) >= 2:
-                    # Extract valid rates
-                    valid_tpr = [rates["true_positive_rate"] for rates in group_error_rates.values()
-                                 if rates["true_positive_rate"] is not None]
-                    valid_fpr = [rates["false_positive_rate"] for rates in group_error_rates.values()
-                                 if rates["false_positive_rate"] is not None]
-
-                    # Calculate disparities
-                    tpr_disparity = max(valid_tpr) - min(valid_tpr) if len(valid_tpr) >= 2 else None
-                    fpr_disparity = max(valid_fpr) - min(valid_fpr) if len(valid_fpr) >= 2 else None
-
-                    phenotype_metrics[str(phenotype)] = {
-                        "error_rates_by_group": group_error_rates,
-                        "disparity": {
-                            "true_positive_rate": float(tpr_disparity) if tpr_disparity is not None else None,
-                            "false_positive_rate": float(fpr_disparity) if fpr_disparity is not None else None
-                        }
-                    }
-
-            if phenotype_metrics:
-                gene_metrics[demographic] = phenotype_metrics
-
-        if gene_metrics:
-            metrics[gene] = gene_metrics
-
-    return metrics
-
-
-def calculate_demographic_parity(data, target_genes, demographics):
-    """
-    Calculate a simplified Demographic Parity metric for each gene and demographic group.
-    Demographic Parity ensures that prediction rates are similar across different demographic groups.
-    """
+def calculate_fairness_metrics(data, target_genes, population_info):
     metrics = {}
 
     for gene in target_genes:
         if gene not in data.columns:
             continue
 
-        gene_metrics = {}
+        gene_metrics = {
+            'overall': {
+                'sample_count': len(data),
+                'phenotype_distribution': data[gene].value_counts().to_dict()
+            },
+            'demographic_disparity': {}
+        }
 
-        for demographic in demographics:
+        for demographic in ['Sex', 'Population', 'Superpopulation']:
             if demographic not in data.columns:
                 continue
 
-            phenotype_metrics = {}
+            groups = data[demographic].dropna().unique()
+            if len(groups) < 2:
+                continue
+
+            group_metrics = {}
             phenotypes = data[gene].dropna().unique()
 
             for phenotype in phenotypes:
-                group_rates = {}
                 overall_rate = (data[gene] == phenotype).mean()
-                groups = data[demographic].dropna().unique()
+                phenotype_metrics = {
+                    'overall_rate': float(overall_rate),
+                    'group_rates': {},
+                    'disparities': []
+                }
+
+                max_diff = 0
+                min_rate = 1.0
+                max_rate = 0.0
 
                 for group in groups:
                     group_data = data[data[demographic] == group]
+                    group_size = len(group_data)
 
-                    if len(group_data) < 5:  # Skip groups with too few samples
+                    if group_size < 5:
                         continue
 
-                    rate = (group_data[gene] == phenotype).mean()
-                    group_rates[str(group)] = float(rate)
-
-                # Only include phenotypes with valid rates for multiple groups
-                if len(group_rates) >= 2:
-                    max_rate = max(group_rates.values())
-                    min_rate = min(group_rates.values())
-
-                    phenotype_metrics[str(phenotype)] = {
-                        "overall_rate": float(overall_rate),
-                        "prediction_rates_by_group": group_rates,
-                        "disparity": {
-                            "maximum_difference": float(max_rate - min_rate),
-                            "min_to_max_ratio": float(min_rate / max_rate) if max_rate > 0 else 1.0
-                        }
+                    group_rate = (group_data[gene] == phenotype).mean()
+                    phenotype_metrics['group_rates'][str(group)] = {
+                        'rate': float(group_rate),
+                        'sample_size': int(group_size)
                     }
 
-            if phenotype_metrics:
-                gene_metrics[demographic] = phenotype_metrics
+                    diff = abs(group_rate - overall_rate)
+                    if diff > max_diff:
+                        max_diff = diff
 
-        if gene_metrics:
-            metrics[gene] = gene_metrics
+                    if group_rate < min_rate:
+                        min_rate = group_rate
+                    if group_rate > max_rate:
+                        max_rate = group_rate
+
+                if len(phenotype_metrics['group_rates']) < 2:
+                    continue
+
+                disparity_ratio = 0.0
+                if max_rate > 0:
+                    disparity_ratio = min_rate / max_rate
+
+                # Calculate disparities between groups
+                groups_list = list(phenotype_metrics['group_rates'].keys())
+                for i in range(len(groups_list)):
+                    for j in range(i + 1, len(groups_list)):
+                        group1 = groups_list[i]
+                        group2 = groups_list[j]
+                        rate1 = phenotype_metrics['group_rates'][group1]['rate']
+                        rate2 = phenotype_metrics['group_rates'][group2]['rate']
+
+                        diff = abs(rate1 - rate2)
+                        ratio = min(rate1, rate2) / max(rate1, rate2) if max(rate1, rate2) > 0 else 1.0
+
+                        if diff >= 0.1 or ratio <= 0.8:
+                            disparity = {
+                                'group1': group1,
+                                'group2': group2,
+                                'rate1': float(rate1),
+                                'rate2': float(rate2),
+                                'difference': float(diff),
+                                'ratio': float(ratio),
+                                'is_significant': diff >= 0.2 or ratio <= 0.5
+                            }
+
+                            phenotype_metrics['disparities'].append(disparity)
+
+                phenotype_metrics['max_disparity'] = float(max_diff)
+                phenotype_metrics['disparity_ratio'] = float(disparity_ratio)
+                phenotype_metrics['has_disparity'] = max_diff >= 0.2 or disparity_ratio <= 0.5
+
+                group_metrics[phenotype] = phenotype_metrics
+
+            gene_metrics['demographic_disparity'][demographic] = group_metrics
+
+        # Add genetic context for population-based differences
+        if 'demographic_disparity' in gene_metrics and 'Population' in gene_metrics['demographic_disparity']:
+            gene_metrics['genetic_context'] = {
+                'note': "Population differences in pharmacogenes often reflect natural genetic variation rather than bias",
+                'expected_variation': True
+            }
+
+        metrics[gene] = gene_metrics
 
     return metrics
 
 
-def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, groundtruth_file, output_file):
+def generate_fairness_summary(fairness_metrics, population_info):
+    summary = {
+        'overall_assessment': {},
+        'demographic_findings': {},
+        'recommendations': []
+    }
+
+    # Overall assessment
+    total_disparities = 0
+    significant_disparities = 0
+    genes_with_disparities = set()
+
+    for gene, metrics in fairness_metrics.items():
+        for demographic, demo_metrics in metrics.get('demographic_disparity', {}).items():
+            for phenotype, pheno_metrics in demo_metrics.items():
+                if pheno_metrics['has_disparity']:
+                    total_disparities += 1
+
+                    if any(disp['is_significant'] for disp in pheno_metrics['disparities']):
+                        significant_disparities += 1
+                        genes_with_disparities.add(gene)
+
+    if significant_disparities == 0:
+        fairness_score = 100
+        fairness_rating = "Excellent"
+    elif significant_disparities <= 2:
+        fairness_score = 90
+        fairness_rating = "Good"
+    elif significant_disparities <= 5:
+        fairness_score = 75
+        fairness_rating = "Fair"
+    else:
+        fairness_score = 60
+        fairness_rating = "Concerning"
+
+    summary['overall_assessment'] = {
+        'fairness_score': fairness_score,
+        'fairness_rating': fairness_rating,
+        'total_disparities': total_disparities,
+        'significant_disparities': significant_disparities,
+        'genes_with_disparities': list(genes_with_disparities)
+    }
+
+    # Demographic findings
+    for demographic in ['Sex', 'Population', 'Superpopulation']:
+        demo_findings = []
+
+        for gene, metrics in fairness_metrics.items():
+            if demographic in metrics.get('demographic_disparity', {}):
+                for phenotype, pheno_metrics in metrics['demographic_disparity'][demographic].items():
+                    if pheno_metrics['has_disparity']:
+                        finding = {
+                            'gene': gene,
+                            'phenotype': phenotype,
+                            'max_disparity': pheno_metrics['max_disparity'],
+                            'disparity_ratio': pheno_metrics['disparity_ratio'],
+                            'group_disparities': []
+                        }
+
+                        for disparity in pheno_metrics['disparities']:
+                            if disparity['is_significant']:
+                                finding['group_disparities'].append(disparity)
+
+                        if finding['group_disparities']:
+                            demo_findings.append(finding)
+
+        if demo_findings:
+            summary['demographic_findings'][demographic] = demo_findings
+
+    # Generate recommendations
+    if significant_disparities == 0:
+        summary['recommendations'].append(
+            "No significant fairness issues detected. Continue monitoring with larger datasets."
+        )
+    else:
+        if 'Population' in summary['demographic_findings'] or 'Superpopulation' in summary['demographic_findings']:
+            summary['recommendations'].append(
+                "Some population differences were detected. Consider whether these represent bias or expected genetic variation in pharmacogenes."
+            )
+
+        if 'Sex' in summary['demographic_findings']:
+            summary['recommendations'].append(
+                "Investigate sex-based disparities in phenotype predictions, which may indicate potential bias."
+            )
+
+        if significant_disparities > 5:
+            summary['recommendations'].append(
+                "Consider rebalancing training data or implementing fairness constraints in the model."
+            )
+
+    # Add genetic context
+    summary['genetic_context'] = {
+        'note': "Pharmacogenomic differences between populations often reflect natural genetic variation rather than algorithmic bias.",
+        'implications': "Some disparities identified may represent actual biological differences rather than model bias."
+    }
+
+    return summary
+
+
+def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, output_file):
     target_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
-    demographics = ['Sex', 'Population', 'Superpopulation']
 
     print(f"Loading population codes from {population_codes_file}")
     population_info = parse_population_codes(population_codes_file)
@@ -259,20 +301,17 @@ def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, g
     print(f"Loading phenotype data from {phenotypes_file}")
     phenotype_df = load_phenotype_data(phenotypes_file)
 
-    print(f"Loading ground truth data from {groundtruth_file}")
-    groundtruth_df = load_groundtruth_data(groundtruth_file)
-
     print("Merging datasets")
-    merged_df = merge_data(cohort_df, phenotype_df, groundtruth_df)
+    merged_df = merge_data(cohort_df, phenotype_df)
 
     print("Calculating phenotype distributions")
     distributions = calculate_phenotype_distributions(merged_df, target_genes)
 
-    print("Calculating Equalized Odds metrics")
-    equalized_odds_metrics = calculate_equalized_odds(merged_df, target_genes, demographics)
+    print("Calculating fairness metrics")
+    fairness_metrics = calculate_fairness_metrics(merged_df, target_genes, population_info)
 
-    print("Calculating Demographic Parity metrics")
-    demographic_parity_metrics = calculate_demographic_parity(merged_df, target_genes, demographics)
+    print("Generating fairness summary")
+    fairness_summary = generate_fairness_summary(fairness_metrics, population_info)
 
     # Prepare final results
     results = {
@@ -288,8 +327,8 @@ def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, g
             }
         },
         'phenotype_distributions': distributions,
-        'equalized_odds_metrics': equalized_odds_metrics,
-        'demographic_parity_metrics': demographic_parity_metrics
+        'fairness_metrics': fairness_metrics,
+        'fairness_summary': fairness_summary
     }
 
     # Save results
@@ -297,9 +336,21 @@ def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, g
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2, cls=NumpyEncoder)
+        json.dump(results, f, indent=2)
 
     print(f"Fairness analysis completed. Results saved to {output_file}")
+
+    # Print summary
+    print("\nFairness Analysis Summary:")
+    print(
+        f"Overall Fairness Score: {fairness_summary['overall_assessment']['fairness_score']}/100 ({fairness_summary['overall_assessment']['fairness_rating']})")
+    print(f"Total disparities detected: {fairness_summary['overall_assessment']['total_disparities']}")
+    print(f"Significant disparities: {fairness_summary['overall_assessment']['significant_disparities']}")
+
+    if fairness_summary['recommendations']:
+        print("\nRecommendations:")
+        for i, rec in enumerate(fairness_summary['recommendations'], 1):
+            print(f"{i}. {rec}")
 
 
 def main():
@@ -307,12 +358,11 @@ def main():
     parser.add_argument('--population-codes', required=True, help='Path to population codes markdown file')
     parser.add_argument('--cohort', required=True, help='Path to cohort CSV file')
     parser.add_argument('--phenotypes', required=True, help='Path to phenotypes CSV file')
-    parser.add_argument('--groundtruth', required=True, help='Path to ground truth phenotypes CSV file')
     parser.add_argument('--output', default='fairness_analysis.json', help='Output JSON file path')
 
     args = parser.parse_args()
 
-    analyze_fairness_bias(args.cohort, args.phenotypes, args.population_codes, args.groundtruth, args.output)
+    analyze_fairness_bias(args.cohort, args.phenotypes, args.population_codes, args.output)
 
 
 if __name__ == "__main__":
