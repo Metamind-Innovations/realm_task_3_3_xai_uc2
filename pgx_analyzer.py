@@ -23,7 +23,11 @@ class VCFParser:
 
     def parse_vcf(self, vcf_file):
         """
-        Parse a VCF file and convert it to a pandas DataFrame.
+        Parse a VCF file and convert it to a pandas DataFrame. The parser processes three types of lines in VCF files:
+
+        - Metadata lines (starting with '##'): These contain file format information, reference genome details, and field descriptions
+        - Header line (starting with '#CHROM'): Defines column names like CHROM, POS, ID, REF, ALT, etc.
+        - Data lines: Contain the actual genetic variants
 
         Parameters
         ----------
@@ -78,10 +82,27 @@ class VCFParser:
                 self.meta_info[key] = value
 
     def _extract_gene(self, info_field):
+        """
+        Uses a regex pattern to pull pharmacogene information. THis extracts the PX tag, which identifies the pharmacogene (e.g. CYP2B6, CYP2C19) associated with each variant.
+
+        :param info_field:
+        :return:
+        """
         gene_match = re.search(r'PX=([^;]+)', info_field)
         return gene_match.group(1) if gene_match else ''
 
     def _extract_genotype(self, format_field, sample_field):
+        """
+        Extracts the GT (genotype) field which contains critical information like:
+
+        - 0/0: Homozygous reference (no variant)
+        - 0/1 or 1/0: Heterozygous (one copy of variant)
+        - 1/1: Homozygous alternate (two copies of variant)
+
+        :param format_field:
+        :param sample_field:
+        :return:
+        """
         format_parts = format_field.split(':')
         sample_parts = sample_field.split(':')
 
@@ -178,9 +199,29 @@ def load_csv_data(csv_files):
     return combined_df
 
 
-def extract_features(variant_data):
+def extract_features(variant_data, output_dir=None):
     """
-    Extract genetic features from variant data for pharmacogenomic analysis.
+    Extract genetic features from variant data for pharmacogenomic analysis. Performs:
+
+    - **Variant identification:** Creates unique feature IDs by combining gene, chromosome position, and reference/alternate alleles
+    - **Binary encoding:** Converts variant presence/absence to 1/0 values
+    - **Zygosity extraction:** Further encodes heterozygous/homozygous states
+
+    **Feature Matrix Construction**
+
+    The function builds a comprehensive feature matrix where:
+
+    - Each row represents a sample (individual)
+    - Each column represents a genetic variant feature
+    - The dimensionality can be extremely high (thousands of features)
+    - Features follow structured naming like CYP2C19_rs12248560_het
+
+    The transformation is critical because it:
+
+    - Simplifies complex genetic data into a binary format
+    - Preserves the biological significance of zygosity
+    - Creates a structure compatible with explanation algorithms
+    - Focuses only on pharmacogenetically relevant variants
 
     Parameters
     ----------
@@ -246,10 +287,28 @@ def extract_features(variant_data):
         for feature, value in sample_features.items():
             X.loc[sample, feature] = value
 
+    # Save intermediate feature matrix if output_dir is provided
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, "feature_matrix.csv")
+        X.to_csv(output_file)
+        print(f"Feature matrix saved to {output_file}")
+
+        # Save feature summary
+        feature_counts = X.sum().sort_values(ascending=False)
+        feature_summary = pd.DataFrame({
+            'feature': feature_counts.index,
+            'count': feature_counts.values,
+            'percentage': (feature_counts.values / len(X) * 100)
+        })
+        summary_file = os.path.join(output_dir, "feature_summary.csv")
+        feature_summary.to_csv(summary_file, index=False)
+        print(f"Feature summary saved to {summary_file}")
+
     return X
 
 
-def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_COL):
+def prepare_targets(phenotypes_file, feature_samples, output_dir=None, SAMPLE_ID_COL=SAMPLE_ID_COL):
     """
     Prepare target variables from phenotype predictions for PGx analysis.
 
@@ -268,7 +327,7 @@ def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_CO
         A tuple containing:
         - Y: DataFrame with encoded phenotypes for each gene
         - phenotypes_df: Original phenotypes DataFrame filtered to match feature samples
-        - phenotype_mappings: Dictionary mapping phenotype names to numeric encodings for each gene
+        - phenotype_mappings: Dictionary mapping phenotype names to numeric encodings for each gene. Looks like: {gene -> {phenotype -> numeric_code}}
     """
     phenotypes_df = pd.read_csv(phenotypes_file)
     print(f"Phenotypes file contains {len(phenotypes_df)} samples")
@@ -319,6 +378,49 @@ def prepare_targets(phenotypes_file, feature_samples, SAMPLE_ID_COL=SAMPLE_ID_CO
                 # No valid phenotypes after filtering
                 Y[gene] = -1
                 phenotype_mappings[gene] = {}
+
+    # Save intermediate target files if output_dir is provided
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save encoded target matrix
+        target_file = os.path.join(output_dir, "encoded_phenotypes.csv")
+        Y.to_csv(target_file)
+        print(f"Encoded phenotypes saved to {target_file}")
+
+        # Save phenotype mappings
+        mappings_data = []
+        for gene, mapping in phenotype_mappings.items():
+            for phenotype, code in mapping.items():
+                mappings_data.append({
+                    'gene': gene,
+                    'phenotype': phenotype,
+                    'numeric_code': code
+                })
+
+        if mappings_data:
+            mappings_df = pd.DataFrame(mappings_data)
+            mappings_file = os.path.join(output_dir, "phenotype_mappings.csv")
+            mappings_df.to_csv(mappings_file, index=False)
+            print(f"Phenotype mappings saved to {mappings_file}")
+
+        # Save phenotype distribution summary
+        summary_data = []
+        for gene in genes_in_phenotypes:
+            phenotype_counts = phenotypes_df[gene].value_counts().to_dict()
+            for phenotype, count in phenotype_counts.items():
+                summary_data.append({
+                    'gene': gene,
+                    'phenotype': phenotype,
+                    'count': count,
+                    'percentage': count / len(phenotypes_df) * 100
+                })
+
+        if summary_data:
+            summary_df = pd.DataFrame(summary_data)
+            summary_file = os.path.join(output_dir, "phenotype_distribution.csv")
+            summary_df.to_csv(summary_file, index=False)
+            print(f"Phenotype distribution saved to {summary_file}")
 
     return Y, phenotypes_df, phenotype_mappings
 
@@ -1549,11 +1651,11 @@ def main():
     print(f"Loaded data for {unique_samples} unique samples")
 
     print("Extracting features...")
-    X = extract_features(variant_data)
+    X = extract_features(variant_data, args.output_dir)
     print(f"Created feature matrix with {X.shape[0]} samples and {X.shape[1]} features")
 
     print(f"Loading phenotypes from {args.phenotypes_file}...")
-    Y, phenotypes_df, phenotype_mappings = prepare_targets(args.phenotypes_file, X.index)
+    Y, phenotypes_df, phenotype_mappings = prepare_targets(args.phenotypes_file, X.index, args.output_dir)
     print(f"Prepared target matrix with {Y.shape[0]} samples")
 
     common_samples = X.index.intersection(Y.index)
