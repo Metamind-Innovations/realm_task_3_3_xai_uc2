@@ -1,27 +1,40 @@
 ## Pharmacogenomics (PGx) Analysis with Explainability
 
-This project provides explainable AI tools for analyzing pharmacogenomic phenotype predictions made by PharmCAT.
-It uses multiple explanation methods (SHAP, LIME, and perturbation-based analysis) with a fuzzy logic system to explain which genetic variants contribute to phenotype predictions and includes a fairness analyzer to detect potential biases across demographic groups.
+This project provides tools for analyzing pharmacogenomic phenotype predictions made by PharmCAT and provide explanations regarding its outputs. 
+It uses correlation analysis and mutual information techniques to identify which genetic variants contribute to phenotype predictions and includes fairness analysis to detect potential biases across demographic groups.
 
 ## Project Overview
 
-PharmCAT is a software tool that analyzes genetic data (VCF files) to predict pharmacogenomic phenotypes that influence drug metabolism and response.
-This project adds an explainability layer to understand why PharmCAT makes specific predictions and to identify potential biases in those predictions
+PharmCAT is a tool that analyzes genetic data (VCF files) to predict pharmacogenomic phenotypes that influence drug metabolism and response. 
+This project adds an explainability layer to understand why PharmCAT makes specific predictions and to identify potential biases.
 
 Key components:
-1. Converting VCF genetic data to analyzable csv format.
-2. Providing explainability for PharmCAT predictions using a blend of SHAP, LIME, and perturbation-based analysis.
-3. Analyzing potential demographic bias and fairness issues in predictions.
-4. Visualizing results with comprehensive dashboards for each gene and overall summaries.
+1. Converting VCF genetic data to analyzable CSV format
+2. Mapping phenotypes to numeric values for analysis
+3. Performing correlation analysis and mutual information analysis to explain PharmCAT predictions
+4. Analyzing potential demographic bias and fairness issues in predictions
+5. Visualizing results for better interpretation (Optional script provided. Not used in kubeflow pipeline)
 
 The project focuses on the key pharmacogenes: **CYP2B6, CYP2C9, CYP2C19, CYP3A5, SLCO1B1, TPMT, and DPYD.**
 
 ## Getting Started
+
 ### Prerequisites
 
 - Python 3.10
 - Docker (for running PharmCAT)
 - Required Python packages (install via `pip install -r requirements.txt`)
+
+### Data Preparation
+
+1. Place your VCF files in the `data/` directory
+2. Ensure demographic data is in `Demographics/` (e.g. `pgx_cohort.csv` and `population_codes.md`)
+3. Ground truth data should be placed in `Groundtruth/groundtruth_phenotype_filtered.csv`
+
+### Running PharmCAT
+
+Use Docker to run PharmCAT on your VCF files: `docker run -v /path/to/data/:/data -v /path/to/result/:/result pharmcat-realm --input_folder /data --result_folder /result`
+This will generate phenotype predictions in the result directory.
 
 ### Execution Steps
 1. **Download Dataset:** Download the provided dataset from [here](https://maastrichtuniversity.sharepoint.com/:f:/r/sites/FSE-REALM/Shared%20Documents/WP6/Open_Source_Datasets_per_UC/UC2_PGx2P_VITO/Data/V2?csf=1&web=1&e=1ReQnp).
@@ -39,211 +52,109 @@ This will execute the pharmcat pipeline for all samples placed in the `data` fol
 |  HG00436  |   IM   |   NM    |   NM   |   PM   |  NM  |   NF    |      NM       |
 
 6. Place the `result` folder in the root of the current project.
-7. Execute the `pgx_analyzer.py` script to explain PharmCAT predictions: `python pgx_analyzer.py --input_dir <path_to_vcf_files> --phenotypes_file result/phenotypes.csv --output_dir pgx_results --convert_vcf --sensitivity 0.7`. 
-   1. The `sensitivity` parameter (0.0-1.0) controls the blend between explanation methods:
-      1. Lower values (near 0.0): Faster but less precise perturbation-based analysis
-      2. Medium values (around 0.5): Balanced approach using LIME and other methods
-      3. Higher values (near 1.0): More precise but computationally intensive SHAP analysis
-   2. The `max_samples` parameter limits how many samples receive detailed analysis (-1 for all samples)
+7. Execute `vcf_to_csv.py` to convert all files located in the `data` directory to a csv file. This file will be used in the next steps (e.g. `python vcf_to_csv.py --input_dir data/ --output_csv encoded.csv`)
+8. Execute `phenotype_mapper.py` to convert the `result/phenotypes.csv` file to an encoded file that will be used later. (e.g. `python phenotype_mapper.py --input_csv result/phenotypes.csv --output_csv phenotypes_encoded.csv`)
+9. Run Explainability Analysis using the `explainer.py` script. (e.g. `python explainer.py --input_file encoded.csv --output_file phenotypes_encoded.csv --results_dir explainer_results --sensitivity 0.7`)
+   1. The `sensitivity` parameter (0.0-1.0) controls the analysis method:
+      - Lower values (<0.5) use mutual information analysis (faster)
+      - Higher values (≥0.5) use correlation analysis (more precise)
+10. Fairness and Bias Analysis: `python fairness_bias_analyzer.py --population-codes Demographics/population_codes.md --cohort Demographics/pgx_cohort.csv --phenotypes result/phenotypes.csv --groundtruth Groundtruth/groundtruth_phenotype_filtered.csv --output fairness_analysis.json`
+11. Visualize Results (Optional): 
+```
+# Visualize explainability results
+python explainer_visualizer.py --input_file explainer_results/correlation_analysis.json --output_dir explainer_visualizations
 
-    This will generate a `pgx_results.json` file with detailed explanations and a `pgx_summary.txt` file with a human-readable summary.
-8. Execute the `pgx_fairness_analyzer.py` script: `python pgx_fairness_analyzer.py --demographic_file Demographics/pgx_cohort.csv --phenotypes_file result/phenotypes.csv --output_dir pgx_fairness_results`. This will generate individual fairness reports for each sample and an overall fairness report, highlighting any potential demographic bias in the predictions.
-9. Execute the `pgx_visualizer.py` script to generate visualization dashboards: `python pgx_visualizer.py --pgx_results pgx_results/pgx_results.json --counterfactual pgx_results/counterfactual_analysis.json --rules pgx_results/rule_extraction.json --decision_trees pgx_results/decision_trees.json --output_dir visualizations`. This generates interactive dashboards for each gene and a summary dashboard that provides visual insights into the analysis results.
-10. Examine the output files:
-   1. `pgx_results/pgx_results.json`: Contains feature importance and sample-specific explanations
-   2. `pgx_results/pgx_summary.txt`: Provides a human-readable summary of the SHAP analysis
-   3. `pgx_fairness_results/overall_fairness_report.json`: Summarizes potential bias across demographic groups
-   4. Individual sample reports in the respective output directories
-   5. `visualizations/`: Contains gene-specific dashboards and a summary dashboard with visual representations of the results
-11. _Alternative Pipeline Execution: Use the Kubeflow pipeline to automate the entire workflow: `python kubeflow_component/pgx_pipeline_component.py`. This will generate a `pharmcat_pipeline_.yaml` file that can be uploaded to a Kubeflow environment for execution. See more details in the [Kubeflow Pipeline Component](#kubeflow-pipeline-component) section. 
+# Visualize fairness analysis
+python pgx_fairness_visualizer.py --input_file fairness_analysis.json --output_dir fairness_visualizations
+```
+12. _Alternative Pipeline Execution_: Use the Kubeflow pipeline to automate the entire workflow: `python kubeflow_component/pgx_pipeline_component.py`. This will generate a `pharmcat_pipeline_.yaml` file that can be uploaded to a Kubeflow environment for execution. See more details in the [Kubeflow Pipeline Component](#kubeflow-pipeline-component) section.
 
+## JSON Output
 
-The `pgx_analyzer.py` script supports the following command-line arguments (can also be used in the Kubeflow pipeline):
+The out of the `explainer.py` script will either be `correlation_analysis.json` or `mutual_information_analysis.json`, depending on sensitivity values:
 
-- `--input_dir` (str, Required): Directory containing VCF or CSV files to analyze. The script will look for files here or in a "preprocessed" subdirectory.
-- `--phenotypes_file` (str, Required): Path to the phenotypes.csv file generated by PharmCAT, containing the phenotype predictions to explain.
-- `--output_dir` (str, default: `pgx_results`): Directory where analysis results will be saved. Will be created if it doesn't exist.
-- `--convert_vcf` (bool, default: False): When specified, converts VCF files to CSV format for analysis. CSV files are saved in the "preprocessed" subdirectory of the output directory.
-- `--max_samples` (int, default: -1): Maximum number of samples to use for detailed SHAP/LIME analysis. Set to -1 to analyze all available samples (may be slow for large datasets).
-- `--sensitivity` (float, default: 0.7): Controls the balance between different explanation methods (value between 0.0-1.0): Lower values (near 0.0): Faster but less precise perturbation-based analysis. Medium values (around 0.5): Balanced approach using LIME and other methods. Higher values (near 1.0): More precise but computationally intensive SHAP analysis
-- `--method` (str, default: None): Explicitly choose a single explanation method, overriding the sensitivity blend. Options: `shap`, `lime`, or `perturbation`
-- `--run_counterfactual` (bool, default: False): When specified, performs counterfactual analysis to show how changing individual variants affects phenotype predictions.
-- `--run_rule_extraction` (bool, default: False): When specified, extracts and visualizes decision rules using surrogate decision tree models, generating images like the decision tree visualization shown above.
-- `--top_k` (int, default: 10): Number of top features to consider for counterfactual analysis. Limits the analysis to the most important variants.
+### Correlation Analysis
 
-The `pgx_visualizer.py` script supports the following command-line arguments:
+The `correlation_analysis.json` file has the following structure:
+```json
+{
+  "Gene": "CYP2B6",
+  "Feature": "CYP2C19_rs4244285",
+  "Correlation": 0.3380949063896326,
+  "P_Value": 0.004201971745583072,
+  "Abs_Correlation": 0.3380949063896326
+}
+```
 
-- `--pgx_results` (str): Path to the pgx_results.json file generated by pgx_analyzer.py
-- `--counterfactual` (str): Path to the counterfactual_analysis.json file
-- `--rules` (str): Path to the rule_extraction.json file 
-- `--decision_trees` (str): Path to the decision_trees.json file
-- `--output_dir` (str, default: 'visualizations'): Directory to save visualization outputs
+### Mutual Information Analysis
 
-The `pgx_fairness_analyzer.py` script supports the following command-line arguments:
+The `mutual_information_analysis.json` file has the following structure:
 
-- `--demographic_file` (str, Required): Path to the Demographics/pgx_cohort.csv file
-- `--phenotypes_file` (str, Required): Path to the result/phenotypes.csv file
-- `--output_dir` (str, default: 'fairness_results'): Directory to save fairness analysis outputs
+```json
+{
+  "Gene": "CYP2B6",
+  "Feature": "CYP2B6_rs3745274",
+  "Importance": 0.7626478098149698
+}
+```
 
-E.G. For a perturbation based analysis with counterfactual and rule explanations run: `python pgx_analyzer.py --input_dir data/ --phenotypes_file result/phenotypes.csv --output_dir detailed_results --convert_vcf --sensitivity 0.8 --max_samples -1 --method perturbation--run_counterfactual --run_rule_extraction`
+### Fairness Analysis
 
-## Analyzer JSON Output
+The `fairness_analysis.json` file produced by `fairness_bias_analyzer.py` has a bit more complex structure and will not be displayed here for brevity.
 
-The output is organized into three main sections:
+## Understanding the Results
 
-- `gene_explanations`
-   
-   This section contains model explanations for each gene (CYP2B6, CYP2C9, CYP2C19, CYP3A5, SLCO1B1, TPMT, DPYD). For each gene:
-  - `prediction_distribution`: The count of different phenotype predictions across the analyzed samples:
-    - PM (Poor Metabolizer)
-    - IM (Intermediate Metabolizer)
-    - NM (Normal Metabolizer)
-    - RM (Rapid Metabolizer)
-    - UM (Ultrarapid Metabolizer)
-    - NF (Normal Function)
-    - DF (Decreased Function)
-    - PF (Poor Function)
-    - IF (Increased Function)
-    - INDETERMINATE (Uncertain phenotype)
-  - `top_features_by_gene`: Organizes the most influential features by their source gene. For example, for CYP2B6, it shows which variants in DPYD, CYP2C19, CYP2C9, etc. had the greatest impact on CYP2B6 phenotype predictions. Each feature includes:
-    - `feature`: The name of the genetic variant (format: `GENE_rsID_allele_type`)
-    - `importance`: The average magnitude of impact this feature has across all samples
-- `feature_importance`
-   
-   This provides a flattened view of global feature importance for each target gene. It lists the top 20 most important features that influence phenotype predictions for each gene, sorted by importance value.
-- `sample_explanations`
+### Explainability Output
 
-   This contains specific explanations for individual samples, showing why particular phenotypes were predicted. For each sample-gene combination:
-   - `sample_id` Identifier for the sample (e.g., **HG00276**)
-   - `gene`: The gene being explained
-   - `predicted_phenotype`: The predicted phenotype for this sample-gene pair
-   - `top_contributions`: List of features that most influenced this prediction:
-     - `feature`: Name of the genetic variant
-     - `value`: The value of this feature for this sample (typically 0 or 1, where 1 means the variant is present)
-     - `shap_value`: The SHAP value representing the impact on the prediction (positive values push toward the predicted phenotype, negative values push away)
-   - `explanation`: A human-readable explanation of the prediction
+The analysis produces several types of outputs:
+
+1. **Feature Importance**: Identifies which genetic variants most influence phenotype predictions
+2. **Correlation/Mutual Information Analysis**: Shows relationships between genetic variants and phenotypes
+3. **Visualizations**: Plots showing the relative importance of features for each gene
+
+### Fairness Analysis Output
+
+The fairness analysis produces:
+
+1. **Equalized Odds Metrics**: Measures whether error rates are similar across demographic groups
+2. **Demographic Parity Metrics**: Ensures prediction rates are similar across demographic groups
+3. **Visualizations**: Plots showing potential disparities in predictions across populations
 
 ### Feature Naming Conventions
+
 Features in the output follow these patterns:
 - `GENE_rsID`: Basic SNP identifier (e.g., "CYP2B6_rs8192709")
 - `GENE_rsID_alt_ALLELE`: Alternative allele (e.g., "DPYD_rs1801160_alt_T")
 - `GENE_rsID_ref_ALLELE`: Reference allele (e.g., "CYP2C9_rs28371686_ref_C")
 - `GENE_rsID_gt_GENOTYPE`: Genotype (e.g., "CYP2C19_rs3758581_gt_1/1" for homozygous)
-- `GENE_posNUMBER`: Position-based feature (e.g., "CYP3A5_pos99652770")
 
-### Fairness Scores & Ratings
+### Phenotype Classifications
 
-The tool generates fairness scores (40-100) for each demographic dimension:
-- **90-100**: Excellent - No significant concerns
-- **80-89**: Good - Minor issues detected
-- **70-79**: Fair - Some noteworthy differences
-- **60-69**: Concerning - Significant disparities detected
-- **<60**: Poor - Substantial fairness issues
-- **Insufficient Data**: Too few samples for reliable assessment
-
-### Key Parameters
-
-#### In overall_fairness_report.json:
-
-- **fairness_scores**: Numerical assessment of fairness for each demographic dimension
-- **fairness_ratings**: Qualitative assessment from "Excellent" to "Poor"
-- **data_completeness**: Identifies missing populations and small sample groups that limit analysis
-- **significant_demographic_effects**: Statistically significant associations with p-values and effect sizes
-- **disparate_impact_summary**: Cases where phenotype rates differ substantially between demographic groups
-- **pharmacogenomic_context**: Notes distinguishing algorithmic bias from natural genetic variation
-
-#### In individual fairness reports (e.g., HG00276_fairness_report.json):
-
-- **demographics**: The specific demographic groups of this individual
-- **phenotypes**: Predicted drug metabolism capabilities for each gene
-- **demographic_comparison**: How this individual's group phenotype rates compare to overall distributions
-- **data_quality.small_sample_warnings**: Flags if this individual belongs to an underrepresented group
-- **summary**: Human-readable explanation of key fairness concerns relevant to this individual
-
-### Interpreting Results
-
-When reviewing PGX fairness reports, remember:
-
-1. **Genetic Context Matters**: Differences between populations often reflect natural genetic variation rather than algorithmic bias
-2. **Sample Size Sensitivity**: Findings for groups with fewer than 5 samples should be interpreted with extreme caution
-3. **Missing Populations**: Absence of certain populations (e.g., SAS - South Asian) limits comprehensive fairness assessment
-4. **Statistical Significance vs. Clinical Relevance**: Statistically significant findings may not always indicate clinically relevant bias
-
-## Decision Tree Visualizations
-This project generates decision tree visualizations (files like `CYP2C19_decision_tree.png`) that represent surrogate models approximating PharmCAT's rule-based decision logic. These visualizations help explain how genetic variants contribute to specific pharmacogenomic phenotype predictions.
-
-### How to Interpret the Decision Trees
-Each node in the tree contains the following information:
-
-- **Feature test** (top line, e.g., `CYP2C19_rs12769205 <= 0.5`): The genetic variant being evaluated
-  - `<= 0.5` means the variant is absent (value of 0 in the feature matrix)
-  - `> 0.5` means the variant is present (value of 1 in the feature matrix)
-- **Gini impurity** (e.g., `gini = 0.721`): A measure of node purity from 0-1
-  - 0.0 means all samples have the same phenotype (perfect purity)
-  - Higher values indicate more mixed phenotypes
-  - Useful for identifying which variants create the clearest separation between phenotypes
-- **Samples** (e.g., `samples = 70`): Number of samples in this node
-- **Value** (e.g., `value = [21, 7, 27, 2, 12, 1]`): Distribution of samples across different phenotype classes
-  - The positions correspond to the phenotype classes shown in the legend (PM, IM, NM, RM, UM, etc.)
-  - Helps visualize how samples are distributed at each decision point
-- **Class** (e.g., `class = NM`): The majority phenotype prediction at this node
-
-### Color Coding
-
-- **Node colors**: Represent the majority phenotype class at that node
-- **Branch colors**: Left branches (True) represent variant absence, right branches (False) represent variant presence
-
-### Example Interpretation
-
-In the example tree for CYP2C19, we can see:
-1. The root split on `CYP2C19_rs12769205`: When this variant is absent, the tree follows the left branch toward Normal Metabolizer (NM) predictions, while presence leads toward Intermediate Metabolizer (IM) predictions
-2. Secondary splits on `CYP2C19_rs12248560` and `CYP3A5_rs776746` further refine the phenotype predictions
-3. The presence of `CYP2B6_rs3745274` (following the right branch at this decision point) contributes to Rapid Metabolizer (RM) predictions
-
-
-An example tree for CYP2C19: ![Decision Tree](CYP2C19_decision_tree.png)
-
-### Why This Matters
-
-These decision trees provide several insights:
-1. **Key variants**: Identify which genetic variants have the strongest influence on phenotype predictions
-2. **Decision pathways**: Trace the logical path from genetic variants to phenotype outcomes
-3. **Phenotype boundaries**: Visualize how combinations of variants separate different metabolizer classes
-4. **Model approximation**: While PharmCAT uses expert-curated rules, these trees provide a simplified, learnable approximation of its decision-making logic
-The trees complement the other explainability methods (SHAP and counterfactual analysis) by providing a visual, rule-based explanation of how variants collectively determine pharmacogenomic phenotypes.
+The analyzed phenotypes include:
+- **PM**: Poor Metabolizer
+- **IM**: Intermediate Metabolizer
+- **NM**: Normal Metabolizer
+- **RM**: Rapid Metabolizer
+- **UM**: Ultrarapid Metabolizer
+- **NF**: Normal Function
+- **DF**: Decreased Function
+- **PF**: Poor Function
+- **IF**: Increased Function
+- **INDETERMINATE**: Uncertain phenotype
 
 ## Kubeflow Pipeline Component
 
 The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating the pharmacogenomics analysis workflow. This pipeline orchestrates the following components:
 
-1. **Download Component**: Downloads project files, input data, and demographic data from a specified GitHub repository. Includes robust error handling for file discovery, with recursive searching and fallback mechanisms if certain files like the visualizer script aren't found.
+1. **Download Component**: Downloads project files, input data, demographic and ground truth data from a specified GitHub repository. Includes robust error handling for file discovery, with recursive searching and fallback mechanisms if certain files like aren't found.
 2. **PharmCAT Analysis**: Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions.
-3. **Explainability Analysis**: Applies SHAP (SHapley Additive exPlanations) analysis to explain the PharmCAT predictions, including counterfactual examples and rule extraction.
+3. **Explainability Analysis**: Applies either correlation analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
 4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
-5. **Visualization Analysis**: Creates interactive dashboards for each gene and a summary dashboard that visually represents the analysis results. This component visualizes phenotype distributions, feature importance rankings, decision rules, and gene interaction patterns.
-You need to specify the docker image containing the PharmCAT analysis code at **line 170** in the `pgx_pipeline_component.py` file. The pipeline can be compiled and deployed to a Kubeflow environment by first executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
 
-The pipeline structure is now a five-step process, with the visualization component providing the final set of output artifacts:
+**IMPORTANT:** You need to specify the docker image containing the PharmCAT analysis code inside the `pharmcat_analysis_docker` pipeline component in the `pgx_pipeline_component.py` file. The pipeline can then be compiled and deployed to a Kubeflow environment by first executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
+
+The pipeline structure can be seen in the image below:
 ![Kubeflow Pipeline](kubeflow_pipeline.png)
-
-### Visualization Components
-
-The visualization step generates several types of visual outputs:
-
-1. **Gene Dashboards** - For each analyzed gene (CYP2B6, CYP2C9, etc.):
-   - Phenotype distribution charts
-   - Top feature importance rankings
-   - Simplified decision tree representations
-   - Rule extraction summaries
-   - Impact analysis of variants
-
-2. **Summary Dashboard** - Providing an overview of:
-   - Gene interaction network showing how genes influence each other
-   - Cross-gene feature importance heatmap
-   - Phenotype distribution across all genes
-   - Links to detailed gene dashboards
-
-The visualizations make the complex analysis results more accessible and interpretable for clinicians and researchers without requiring deep technical knowledge of the underlying algorithms.
 
 ## Accessing the Generated Artifacts
 
@@ -251,11 +162,7 @@ The pipeline stores generated artifacts in MinIO object storage within the Kubef
 1. Set up port forwarding to the MinIO service by running `kubectl port-forward -n kubeflow svc/minio-service 9000:9000` in a terminal window
 2. Access the MinIO web interface at `http://localhost:9000`
 3. Log in with the default credentials: **username:** `minio`, **password:** `minio123`
-4. Navigate to the `mlpipeline` bucket, where you'll find the respective folders according to the automatically assigned uuid of the pipeline. (An example location could be: `http://localhost:9000/minio/mlpipeline/v2/artifacts/pharmcat-pgx-analysis-pipeline-dockerized/f3346d91-8fae-475f-ab83-f78df99264bc/`)
-
-The visualization artifacts are stored in the pipeline's output directory structure under the visualization component's UUID folder. Look for files named:
-- `pgx_summary_dashboard.png`
-- `dashboard_CYP2B6.png`, `dashboard_CYP2C9.png`, etc.
+4. Navigate to the `mlpipeline` bucket, where you'll find the respective folders according to the automatically assigned uuid of the pipeline. (An example location could be: `http://localhost:9000/minio/mlpipeline/v2/artifacts/pharmcat-pgx-analysis-pipeline/50c16278-0dde-44f1-b018-5b859a3fadf2/`)
 
 ## 📜 License & Usage
 
