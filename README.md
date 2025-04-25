@@ -120,6 +120,49 @@ The fairness analysis produces:
 2. **Demographic Parity Metrics**: Ensures prediction rates are similar across demographic groups
 3. **Visualizations**: Plots showing potential disparities in predictions across populations
 
+### Phenotype Classifications and Encoding
+
+The analyzed phenotypes include:
+- **PM**: Poor Metabolizer
+- **LPM**: Likely Poor Metabolizer
+- **IM**: Intermediate Metabolizer
+- **LIM**: Likely Intermediate Metabolizer
+- **NM**: Normal Metabolizer
+- **LNM**: Likely Normal Metabolizer
+- **RM**: Rapid Metabolizer
+- **LRM**: Likely Rapid Metabolizer
+- **UM**: Ultrarapid Metabolizer
+- **LUM**: Likely Ultrarapid Metabolizer
+- **NF**: Normal Function
+- **DF**: Decreased Function
+- **PF**: Poor Function
+- **PDF**: Possibly Decreased Function
+- **IF**: Increased Function
+- **INDETERMINATE**: Uncertain phenotype
+
+#### Numeric Encoding of Phenotypes
+
+The `phenotype_mapper.py` script encodes these phenotypes as numeric values for analysis:
+
+| Phenotype     | Encoded Value |
+|---------------|---------------|
+| NM            | 0             |
+| LNM           | 1             |
+| IM            | 2             |
+| LIM           | 3             |
+| PM            | 4             |
+| LPM           | 5             |
+| UM            | 6             |
+| LUM           | 7             |
+| RM            | 8             |
+| LRM           | 9             |
+| NF            | 10            |
+| DF            | 11            |
+| IF            | 12            |
+| PF            | 13            |
+| PDF           | 14            |
+| INDETERMINATE | -1            |
+
 ### Feature Naming Conventions
 
 Features in the output follow these patterns:
@@ -128,19 +171,21 @@ Features in the output follow these patterns:
 - `GENE_rsID_ref_ALLELE`: Reference allele (e.g., "CYP2C9_rs28371686_ref_C")
 - `GENE_rsID_gt_GENOTYPE`: Genotype (e.g., "CYP2C19_rs3758581_gt_1/1" for homozygous)
 
-### Phenotype Classifications
+## Visualization Outputs (Optional)
 
-The analyzed phenotypes include:
-- **PM**: Poor Metabolizer
-- **IM**: Intermediate Metabolizer
-- **NM**: Normal Metabolizer
-- **RM**: Rapid Metabolizer
-- **UM**: Ultrarapid Metabolizer
-- **NF**: Normal Function
-- **DF**: Decreased Function
-- **PF**: Poor Function
-- **IF**: Increased Function
-- **INDETERMINATE**: Uncertain phenotype
+The `explainer_visualizer.py` and `pgx_fairness_visualizer.py` scripts generate the following visualizations:
+
+### Explainer Visualizations
+- **Top Features per Gene**: Bar charts showing the most important features for each gene based on correlation or mutual information
+- **Feature Heatmap**: Displays the relationship between top features and genes to identify patterns
+- **Gene-specific Visualizations**: Individual charts for each gene showing feature importance
+
+### Fairness Visualizations
+- **Demographic Distribution**: Shows sample distribution across different demographic groups
+- **Phenotype Distribution**: Displays phenotype frequencies overall and by superpopulation
+- **Equalized Odds Metrics**: Visualizes disparities in true positive and false positive rates across demographic groups
+- **Demographic Parity Metrics**: Shows differences in prediction rates across demographic groups
+- **Summary Dashboard**: A comprehensive overview of fairness metrics across all genes
 
 ## Kubeflow Pipeline Component
 
@@ -151,8 +196,17 @@ The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating 
 3. **Explainability Analysis**: Applies either correlation analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
 4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
 
-**IMPORTANT:** You need to specify the docker image containing the PharmCAT analysis code inside the `pharmcat_analysis_docker` pipeline component in the `pgx_pipeline_component.py` file. The pipeline can then be compiled and deployed to a Kubeflow environment by first executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
+**IMPORTANT:** You need to modify the `pharmcat_analysis_docker` function in the `pgx_pipeline_component.py` file to specify your PharmCAT Docker image:
 
+```python
+# Replace this:
+image="<your_docker_pharmcat_image>",
+
+# With your actual Docker image, for example:
+image="docker.io/username/pharmcat-realm:latest",
+```
+
+After configuring the Docker image, the pipeline can be compiled and deployed to a Kubeflow environment by executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
 The pipeline structure can be seen in the image below:
 ![Kubeflow Pipeline](kubeflow_pipeline.png)
 
