@@ -191,8 +191,8 @@ The `explainer_visualizer.py` and `pgx_fairness_visualizer.py` scripts generate 
 
 The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating the pharmacogenomics analysis workflow. This pipeline orchestrates the following components:
 
-1. **Download Component**: Downloads project files, input data, demographic and ground truth data from a specified GitHub repository. Includes robust error handling for file discovery, with recursive searching and fallback mechanisms if certain files like aren't found.
-2. **PharmCAT Analysis**: Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions.
+1. **Download Component**: Downloads project files, input data, demographic and ground truth data from a specified GitHub repository. The pipeline expects the repo to contain the `Demographics/`, `Groundtruth/` and `data/` folders at its root with all required files placed inside.
+2. **PharmCAT Analysis**: Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions. The docker image is built using the provided Dockerfile and all required files and scripts by VITO, and is uploaded to an image hosting repository.
 3. **Explainability Analysis**: Applies either correlation analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
 4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
 
@@ -207,6 +207,8 @@ image="docker.io/username/pharmcat-realm:latest",
 ```
 
 After configuring the Docker image, the pipeline can be compiled and deployed to a Kubeflow environment by executing `python .\kubeflow_component\pgx_pipeline_component.py` and then uploading the generated YAML file to the Kubeflow UI.
+The Kubeflow UI expects 2 pipeline arguments when running: `github_repo_url` which contains data and python scripts and `sensitivity`, which is a [0,1] float number.
+
 The pipeline structure can be seen in the image below:
 ![Kubeflow Pipeline](kubeflow_pipeline.png)
 
