@@ -9,10 +9,17 @@ PharmCAT is a tool that analyzes genetic data (VCF files) to predict pharmacogen
 This project adds an explainability layer to understand why PharmCAT makes specific predictions and to identify potential biases.
 
 Key components:
-1. Converting VCF genetic data to analyzable CSV format
-2. Mapping phenotypes to numeric values for analysis
-3. Performing correlation analysis and mutual information analysis to explain PharmCAT predictions
-4. Analyzing potential demographic bias and fairness issues in predictions
+1. Converting VCF genetic data to analyzable CSV format using the `vcf_to_csv.py` script. This function extracts the essential information from VCF files:
+     - Patient identifier
+     - Chromosome, position, and variant ID (rsID)
+     - Reference and alternate alleles
+     - Gene information (from the PX field)
+     - Genotype information
+   
+     The function parses each non-header line in the VCF file, extracting the relevant fields and organizing them into a pandas DataFrame. This creates a clean, tabular representation of the genetic variants. More information can be seen in the [VCF to CSV Encoding](#VCF-to-CSV-Encoding) section
+2. Mapping phenotypes to numeric values for analysis, using the `phenotype_mapping.py` script. The mapping can be seen in the [Numeric Encoding of Phenotypes](#Numeric-Encoding-of-Phenotypes) section
+3. Performing correlation analysis and mutual information analysis to explain PharmCAT predictions using `explainer.py`
+4. Analyzing potential demographic bias and fairness issues in predictions with the `fairness_bias_analyzer.py` script
 5. Visualizing results for better interpretation (Optional script provided. Not used in kubeflow pipeline)
 
 The project focuses on the key pharmacogenes: **CYP2B6, CYP2C9, CYP2C19, CYP3A5, SLCO1B1, TPMT, and DPYD.**
@@ -43,7 +50,7 @@ This will generate phenotype predictions in the result directory.
    1. Create a folder called `pharmcat_execution` and unzip all files downloaded from step 2. into it. 
    2. Inside the `data` folder, place all `.vcf` files downloaded from step 1.
 4. Navigate inside the `pharmcat_execution` directory and execute: `docker build -t pharmcat-realm .`
-5. _(WINDOWS)_ Execute: `docker run -v <absolute_path_to_data_folder>:/data -v <absolute_path_to_result_folder>:/result pharmcat-realm --input_folder /data --result_folder /result`. (e.g. `docker run -v C:/Users/gigak/Desktop/realm_uc2_vito_image/data/:/data -v C:/Users/gigak/Desktop/realm_uc2_vito_image/result/:/result pharmcat-realm --input_folder /data --result_folder /result`).
+5. _(WINDOWS)_ Execute: `docker run -v <absolute_path_to_data_folder>:/data -v <absolute_path_to_result_folder>:/result pharmcat-realm --input_folder /data --result_folder /result`.
 This will execute the pharmcat pipeline for all samples placed in the `data` folder. The `result` folder will contain `phenotype.json` files for each sample and a total `phenotypes.csv` file containing the output in the format:
 
 | Sample ID | CYP2B6 | CYP2C19 | CYP2C9 | CYP3A5 | DPYD | SLCO1B1 |     TPMT      |
@@ -101,6 +108,40 @@ The `mutual_information_analysis.json` file has the following structure:
 ### Fairness Analysis
 
 The `fairness_analysis.json` file produced by `fairness_bias_analyzer.py` has a bit more complex structure and will not be displayed here for brevity.
+In short the output file `fairness_analysis.json` contains the objects like:
+
+```json
+"equalized_odds_metrics": {
+    "CYP2B6": {
+      "Sex": {
+        "IM": {
+          "error_rates_by_group": {
+            "F": {
+              "false_positive_rate": 0.07142857142857142
+            },
+            "M": {
+              "false_positive_rate": 0.05263157894736842
+            }
+          }
+        }
+...
+```
+and
+
+```json
+"demographic_parity_metrics": {
+    "CYP2B6": {
+      "Sex": {
+        "NM": {
+          "prediction_rates_by_group": {
+            "F": 0.38095238095238093,
+            "M": 0.32142857142857145
+          },
+        }
+...
+```
+
+Add more explanation here regarding fairness
 
 ## Understanding the Results
 
@@ -118,7 +159,7 @@ The fairness analysis produces:
 
 1. **Equalized Odds Metrics**: Measures whether error rates are similar across demographic groups
 2. **Demographic Parity Metrics**: Ensures prediction rates are similar across demographic groups
-3. **Visualizations**: Plots showing potential disparities in predictions across populations
+3. **Visualizations**: Plots showing visualizing the above results
 
 ### Phenotype Classifications and Encoding
 
@@ -139,6 +180,31 @@ The analyzed phenotypes include:
 - **PDF**: Possibly Decreased Function
 - **IF**: Increased Function
 - **INDETERMINATE**: Uncertain phenotype
+
+#### VCF to CSV Encoding
+
+The preprocessing function takes the CSV data and transforms it into a format suitable for analysis:
+1. **Genotype Encoding:**
+   1. Converts genotype strings (like "0/1") to numerical values:
+      1. 0: Homozygous reference (0/0)
+      2. 1: Heterozygous (0/1, 1/0, 0/2, 2/0)
+      3. 2: Homozygous alternate or compound heterozygous (1/1, 1/2, 2/1, 2/2)
+      4. -1: Missing or unknown genotype
+2. **Patient-Centric Pivoting:**
+   1. Reshapes the data so each row represents a patient
+   2. Each column represents a specific gene-variant combination (e.g., "CYP2D6_rs3892097")
+   3. Uses the first occurring value when duplicates exist
+3. **Feature Engineering:**
+   1. Creates "HAS_GENE_X" flags for important pharmacogenetic genes
+   2. These flags indicate whether the patient has any known variants in that gene
+
+This approach is useful because of:
+
+1. **Dimensionality Reduction:** By encoding genotypes as 0, 1, 2, or -1, we simplify the data while preserving the biological meaning (homozygous reference, heterozygous, homozygous alternate).
+2. **Handling Missing Data:** Using -1 for missing/unknown genotypes allows the model to distinguish between reference genotype (0) and missing data.
+3. **Gene-Level Features:** The "HAS_GENE_X" flags provide a higher-level abstraction that can be useful for models.
+4. **Patient-Centric View:** The pivoted format makes it easy to train models that predict metabolizer status for each patient.
+5. **Sparse Data Handling:** By filling missing values with -1, we handle the sparse nature of genetic data where not all patients have data for all variants.
 
 #### Numeric Encoding of Phenotypes
 
