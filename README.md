@@ -14,12 +14,12 @@ Key components:
      - Chromosome, position, and variant ID (rsID)
      - Reference and alternate alleles
      - Gene information (from the PX field)
-     - Genotype information
-   
-     The function parses each non-header line in the VCF file, extracting the relevant fields and organizing them into a pandas DataFrame. This creates a clean, tabular representation of the genetic variants. More information can be seen in the [VCF to CSV Encoding](#VCF-to-CSV-Encoding) section
-2. Mapping phenotypes to numeric values for analysis, using the `phenotype_mapping.py` script. The mapping can be seen in the [Numeric Encoding of Phenotypes](#Numeric-Encoding-of-Phenotypes) section
+     - Genotype information 
+     
+   The function parses each non-header line in the VCF file, extracting the relevant fields and organizing them into a pandas DataFrame. This creates a clean, tabular representation of the genetic variants. More information can be seen in the [VCF to CSV Encoding](#VCF-to-CSV-Encoding) section
+2. Mapping phenotypes to numeric values for analysis, using the `phenotype_mapping.py` script. The mapping can be seen in the [Numeric Encoding of Phenotypes](#Numeric-Encoding-of-Phenotypes) section 
 3. Performing correlation analysis and mutual information analysis to explain PharmCAT predictions using `explainer.py`
-4. Analyzing potential demographic bias and fairness issues in predictions with the `fairness_bias_analyzer.py` script
+4. Analyzing potential demographic bias and fairness issues in predictions with the `fairness_bias_analyzer.py` script 
 5. Visualizing results for better interpretation (Optional script provided. Not used in kubeflow pipeline)
 
 The project focuses on the key pharmacogenes: **CYP2B6, CYP2C9, CYP2C19, CYP3A5, SLCO1B1, TPMT, and DPYD.**
