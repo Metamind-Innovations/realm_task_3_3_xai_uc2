@@ -13,18 +13,19 @@ def download_project(
         input_data: Output[Dataset],
         demographic_data: Output[Dataset],
         groundtruth_data: Output[Dataset],
-        branch: str = "main"
 ):
     import subprocess
     import shutil
     import re
     from pathlib import Path
 
+    branch = "main"  # Default branch if not specified in URL
     branch_match = re.search(r"/tree/([^/]+)", github_repo_url)
     if branch_match:
         url_branch = branch_match.group(1)
         print(f"Extracted branch '{url_branch}' from URL")
         branch = url_branch
+    # Clean repo URL (remove /tree/branch suffix if present)
     repo_url = re.sub(r"/tree/[^/]+/?$", "", github_repo_url.strip())
     if not repo_url.endswith(".git"):
         repo_url = repo_url.rstrip("/") + ".git"
@@ -427,12 +428,10 @@ def fairness_bias_analyzer(
 )
 def pharmcat_pipeline(
         github_repo_url: str,
-        branch: str = "main",
         sensitivity: float = 0.7
 ):
     download_task = download_project(
-        github_repo_url=github_repo_url,
-        branch=branch
+        github_repo_url=github_repo_url
     )
     download_task.set_caching_options(False)
 
