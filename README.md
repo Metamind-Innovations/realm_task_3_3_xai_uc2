@@ -239,19 +239,38 @@ Features in the output follow these patterns:
 
 ## Visualization Outputs (Optional)
 
-The `explainer_visualizer.py` and `pgx_fairness_visualizer.py` scripts generate the following visualizations:
+The `explainer_visualizer.py` and `pgx_fairness_visualizer.py` scripts generate visualizations to help interpret analysis results.
 
-### Explainer Visualizations
-- **Top Features per Gene**: Bar charts showing the most important features for each gene based on correlation or mutual information
-- **Feature Heatmap**: Displays the relationship between top features and genes to identify patterns
-- **Gene-specific Visualizations**: Individual charts for each gene showing feature importance
+### Explainer Visualizations (`explainer_visualizer.py`)
 
-### Fairness Visualizations
-- **Demographic Distribution**: Shows sample distribution across different demographic groups
-- **Phenotype Distribution**: Displays phenotype frequencies overall and by superpopulation
-- **Equalized Odds Metrics**: Visualizes disparities in true positive and false positive rates across demographic groups
-- **Demographic Parity Metrics**: Shows differences in prediction rates across demographic groups
-- **Summary Dashboard**: A comprehensive overview of fairness metrics across all genes
+This script processes the output from `explainer.py` (either correlation or mutual information analysis) and generates:
+
+- **Top Features per Gene**: Bar charts showing the 10 most important features for each gene, sorted by:
+  - Correlation magnitude (for correlation analysis)
+  - Importance score (for mutual information analysis)
+- **Feature Importance Heatmap**: A heatmap visualization showing the relationship between top features and pharmacogenes, using:
+  - "YlOrRd" color map for correlation analysis
+  - "viridis" color map for mutual information analysis
+- **Automatic Analysis Type Detection**: The script automatically determines whether to visualize correlation or mutual information data based on the input file structure
+
+The visualizations are saved as PNG files in the specified output directory, with one bar chart per gene and a comprehensive heatmap.
+
+### Fairness Visualizations (`pgx_fairness_visualizer.py`)
+
+This script processes the output from `fairness_bias_analyzer.py` and generates:
+
+- **Equalized Odds Visualizations**: Bar charts showing false positive rates by demographic groups for different genes and phenotypes
+  - Each bar uses color coding based on the superpopulation (AFR, AMR, EAS, EUR, SAS)
+  - Values are annotated on each bar for easy comparison
+  
+- **Demographic Parity Visualizations**: Bar charts depicting prediction rates across demographic groups
+  - Consistent color coding matches the equalized odds visualizations
+  - Values are displayed on each bar for direct comparison
+
+- **Summary Dashboard**: A consolidated view containing:
+  - A heatmap of average false positive rates by gene and superpopulation (using "YlOrRd" color map)
+  - A heatmap of average prediction rates by gene and superpopulation (using "YlGnBu" color map)
+  - Both heatmaps include annotation of values for detailed inspection
 
 ## Kubeflow Pipeline Component
 
