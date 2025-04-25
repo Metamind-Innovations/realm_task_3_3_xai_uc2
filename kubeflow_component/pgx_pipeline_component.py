@@ -306,7 +306,7 @@ def run_explainer(
         else:
             raise Exception(f"Encoded phenotypes file not found at {output_file} or subdirectories")
 
-    results_dir = explainer_results_path / "explainer_results"
+    results_dir = explainer_results_path
 
     command = [
         "python", str(explainer_script),
