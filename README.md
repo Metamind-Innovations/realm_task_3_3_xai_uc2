@@ -37,8 +37,8 @@ Use Docker to run PharmCAT on your VCF files: `docker run -v /path/to/data/:/dat
 This will generate phenotype predictions in the result directory.
 
 ### Execution Steps
-1. **Download Dataset:** Download the provided dataset from [here](https://maastrichtuniversity.sharepoint.com/:f:/r/sites/FSE-REALM/Shared%20Documents/WP6/Open_Source_Datasets_per_UC/UC2_PGx2P_VITO/Data/V2?csf=1&web=1&e=1ReQnp).
-2. **Download PharmCAT Docker Components:** Download the necessary tools and scripts from [here](https://maastrichtuniversity.sharepoint.com/:u:/r/sites/FSE-REALM/Shared%20Documents/WP6/Open_Source_Datasets_per_UC/UC2_PGx2P_VITO/Data/V2/Software/pharmcat-realm.zip?csf=1&web=1&e=NQFgXx)
+1. **Download Dataset:** Download the provided dataset.
+2. **Download PharmCAT Docker Components:** Download the necessary tools and scripts.
 3. **Setup Execution Environment:**
    1. Create a folder called `pharmcat_execution` and unzip all files downloaded from step 2. into it. 
    2. Inside the `data` folder, place all `.vcf` files downloaded from step 1.
