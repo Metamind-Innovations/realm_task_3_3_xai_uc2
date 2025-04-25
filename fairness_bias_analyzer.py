@@ -88,36 +88,7 @@ def merge_data(cohort_df, phenotype_df, groundtruth_df=None):
     return merged_df
 
 
-def calculate_phenotype_distributions(data, target_genes):
-    distributions = {}
-
-    for gene in target_genes:
-        if gene in data.columns:
-            overall_dist = data[gene].value_counts(normalize=True).to_dict()
-            distributions[gene] = {
-                'overall': overall_dist
-            }
-
-            for demographic in ['Sex', 'Population', 'Superpopulation']:
-                if demographic in data.columns:
-                    distributions[gene][demographic] = {}
-                    for group in data[demographic].dropna().unique():
-                        group_data = data[data[demographic] == group]
-                        if len(group_data) > 0:
-                            group_dist = group_data[gene].value_counts(normalize=True).to_dict()
-                            distributions[gene][demographic][group] = {
-                                'distribution': group_dist,
-                                'sample_size': len(group_data)
-                            }
-
-    return distributions
-
-
 def calculate_equalized_odds(data, target_genes, demographics):
-    """
-    Calculate a simplified Equalized Odds metric for each gene and demographic group.
-    Equalized Odds measures whether error rates are similar across different demographic groups.
-    """
     metrics = {}
 
     for gene in target_genes:
@@ -142,42 +113,20 @@ def calculate_equalized_odds(data, target_genes, demographics):
                 for group in groups:
                     group_data = data[data[demographic] == group]
 
-                    if len(group_data) < 5:  # Skip groups with too few samples
+                    if len(group_data) < 5:
                         continue
 
-                    # Calculate true positive rate (TPR) and false positive rate (FPR)
-                    true_pos = sum((group_data[gene] == phenotype) & (group_data[gene_groundtruth] == phenotype))
                     false_pos = sum((group_data[gene] == phenotype) & (group_data[gene_groundtruth] != phenotype))
-
-                    actual_pos = sum(group_data[gene_groundtruth] == phenotype)
                     actual_neg = sum(group_data[gene_groundtruth] != phenotype)
-
-                    tpr = true_pos / actual_pos if actual_pos > 0 else None
                     fpr = false_pos / actual_neg if actual_neg > 0 else None
 
                     group_error_rates[str(group)] = {
-                        "true_positive_rate": float(tpr) if tpr is not None else None,
                         "false_positive_rate": float(fpr) if fpr is not None else None
                     }
 
-                # Only include phenotypes with valid metrics for multiple groups
                 if len(group_error_rates) >= 2:
-                    # Extract valid rates
-                    valid_tpr = [rates["true_positive_rate"] for rates in group_error_rates.values()
-                                 if rates["true_positive_rate"] is not None]
-                    valid_fpr = [rates["false_positive_rate"] for rates in group_error_rates.values()
-                                 if rates["false_positive_rate"] is not None]
-
-                    # Calculate disparities
-                    tpr_disparity = max(valid_tpr) - min(valid_tpr) if len(valid_tpr) >= 2 else None
-                    fpr_disparity = max(valid_fpr) - min(valid_fpr) if len(valid_fpr) >= 2 else None
-
                     phenotype_metrics[str(phenotype)] = {
-                        "error_rates_by_group": group_error_rates,
-                        "disparity": {
-                            "true_positive_rate": float(tpr_disparity) if tpr_disparity is not None else None,
-                            "false_positive_rate": float(fpr_disparity) if fpr_disparity is not None else None
-                        }
+                        "error_rates_by_group": group_error_rates
                     }
 
             if phenotype_metrics:
@@ -190,10 +139,6 @@ def calculate_equalized_odds(data, target_genes, demographics):
 
 
 def calculate_demographic_parity(data, target_genes, demographics):
-    """
-    Calculate a simplified Demographic Parity metric for each gene and demographic group.
-    Demographic Parity ensures that prediction rates are similar across different demographic groups.
-    """
     metrics = {}
 
     for gene in target_genes:
@@ -211,30 +156,20 @@ def calculate_demographic_parity(data, target_genes, demographics):
 
             for phenotype in phenotypes:
                 group_rates = {}
-                overall_rate = (data[gene] == phenotype).mean()
                 groups = data[demographic].dropna().unique()
 
                 for group in groups:
                     group_data = data[data[demographic] == group]
 
-                    if len(group_data) < 5:  # Skip groups with too few samples
+                    if len(group_data) < 5:
                         continue
 
                     rate = (group_data[gene] == phenotype).mean()
                     group_rates[str(group)] = float(rate)
 
-                # Only include phenotypes with valid rates for multiple groups
                 if len(group_rates) >= 2:
-                    max_rate = max(group_rates.values())
-                    min_rate = min(group_rates.values())
-
                     phenotype_metrics[str(phenotype)] = {
-                        "overall_rate": float(overall_rate),
-                        "prediction_rates_by_group": group_rates,
-                        "disparity": {
-                            "maximum_difference": float(max_rate - min_rate),
-                            "min_to_max_ratio": float(min_rate / max_rate) if max_rate > 0 else 1.0
-                        }
+                        "prediction_rates_by_group": group_rates
                     }
 
             if phenotype_metrics:
@@ -265,34 +200,17 @@ def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, g
     print("Merging datasets")
     merged_df = merge_data(cohort_df, phenotype_df, groundtruth_df)
 
-    print("Calculating phenotype distributions")
-    distributions = calculate_phenotype_distributions(merged_df, target_genes)
-
     print("Calculating Equalized Odds metrics")
     equalized_odds_metrics = calculate_equalized_odds(merged_df, target_genes, demographics)
 
     print("Calculating Demographic Parity metrics")
     demographic_parity_metrics = calculate_demographic_parity(merged_df, target_genes, demographics)
 
-    # Prepare final results
     results = {
-        'metadata': {
-            'sample_count': len(merged_df),
-            'genes_analyzed': target_genes,
-            'demographics': {
-                'sex_distribution': merged_df['Sex'].value_counts().to_dict() if 'Sex' in merged_df.columns else {},
-                'population_distribution': merged_df[
-                    'Population'].value_counts().to_dict() if 'Population' in merged_df.columns else {},
-                'superpopulation_distribution': merged_df[
-                    'Superpopulation'].value_counts().to_dict() if 'Superpopulation' in merged_df.columns else {}
-            }
-        },
-        'phenotype_distributions': distributions,
         'equalized_odds_metrics': equalized_odds_metrics,
         'demographic_parity_metrics': demographic_parity_metrics
     }
 
-    # Save results
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
