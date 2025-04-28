@@ -14,7 +14,7 @@ This component, no matter the Use Case, returns as output:
 - XAI methodology output (depending on the Use Case - image or json file)
 - Fairness and Bias results (depending on the Use Case - nothing if we are talking for images or json file)
 
-## Pharmacogenomics (PGx) Analysis with Explainability (Use Case 1)
+## Pharmacogenomics (PGx) Analysis with Explainability (Use Case 2)
 
 This project provides tools for analyzing pharmacogenomic phenotype predictions made by PharmCAT and provide explanations regarding its outputs. 
 It uses correlation analysis and mutual information techniques to identify which genetic variants contribute to phenotype predictions and includes fairness analysis to detect potential biases across demographic groups.
