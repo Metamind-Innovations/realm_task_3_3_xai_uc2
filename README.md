@@ -107,7 +107,7 @@ The `mutual_information_analysis.json` file has the following structure:
 
 ### Fairness Analysis
 
-The `fairness_analysis.json` file produced by `fairness_bias_analyzer.py` has a bit more complex structure and will not be displayed here for brevity.
+The `fairness_analysis.json` file produced by `fairness_bias_analyzer.py` has a bit more complex structure and will not be displayed here for brevity. The categories used for each of the 2 json objects are `Sex`, `Population` and `Superpopulation`, according to `pgx_cohort.csv` and `population_codes.md` files.
 In short the output file `fairness_analysis.json` contains the objects like:
 
 ```json
