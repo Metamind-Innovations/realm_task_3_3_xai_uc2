@@ -17,12 +17,16 @@ This component, no matter the Use Case, returns as output:
 ## Pharmacogenomics (PGx) Analysis with Explainability (Use Case 2)
 
 This project provides tools for analyzing pharmacogenomic phenotype predictions made by PharmCAT and provide explanations regarding its outputs. 
-It uses correlation analysis and mutual information techniques to identify which genetic variants contribute to phenotype predictions and includes fairness analysis to detect potential biases across demographic groups.
+It uses categorical association analysis and mutual information techniques to identify which genetic variants contribute to phenotype predictions and includes fairness analysis to detect potential biases across demographic groups.
 
 ## Project Overview
 
 PharmCAT is a tool that analyzes genetic data (VCF files) to predict pharmacogenomic phenotypes that influence drug metabolism and response. 
 This project adds an explainability layer to understand why PharmCAT makes specific predictions and to identify potential biases.
+
+**IMPORTANT:** For this use case, since we are using PharmCAT which is a rule based pgx model, and not an actual AI model, XAI is not directly applicable. 
+Additionally, the underlying PharmCAT model is dockerized so we have no direct access to it in order to use XAI techniques like SHAP on the model's weights. 
+Therefore, we perform mutual information analysis and categorical association analysis only on the provided input (vcf files) and output files (csv file).
 
 Key components:
 1. Converting VCF genetic data to analyzable CSV format using the `vcf_to_csv.py` script. This function extracts the essential information from VCF files:
@@ -34,7 +38,7 @@ Key components:
      
    The function parses each non-header line in the VCF file, extracting the relevant fields and organizing them into a pandas DataFrame. This creates a clean, tabular representation of the genetic variants. More information can be seen in the [VCF to CSV Encoding](#VCF-to-CSV-Encoding) section
 2. Mapping phenotypes to numeric values for analysis, using the `phenotype_mapping.py` script. The mapping can be seen in the [Numeric Encoding of Phenotypes](#Numeric-Encoding-of-Phenotypes) section 
-3. Performing correlation analysis and mutual information analysis to explain PharmCAT predictions using `explainer.py`
+3. Performing categorical association analysis and mutual information analysis to explain PharmCAT predictions using `explainer.py`
 4. Analyzing potential demographic bias and fairness issues in predictions with the `fairness_bias_analyzer.py` script 
 5. Visualizing results for better interpretation (Optional script provided. Not used in kubeflow pipeline)
 
@@ -80,12 +84,12 @@ This will execute the pharmcat pipeline for all samples placed in the `data` fol
 9. Run Explainability Analysis using the `explainer.py` script. (e.g. `python explainer.py --input_file encoded.csv --output_file phenotypes_encoded.csv --results_dir explainer_results --sensitivity 0.7`)
    1. The `sensitivity` parameter (0.0-1.0) controls the analysis method:
       - Lower values (<0.5) use mutual information analysis (faster)
-      - Higher values (≥0.5) use correlation analysis (more precise)
+      - Higher values (≥0.5) use categorical association analysis (more precise)
 10. Fairness and Bias Analysis: `python fairness_bias_analyzer.py --population-codes Demographics/population_codes.md --cohort Demographics/pgx_cohort.csv --phenotypes result/phenotypes.csv --groundtruth Groundtruth/groundtruth_phenotype_filtered.csv --output fairness_analysis.json`
 11. Visualize Results (Optional): 
 ```
 # Visualize explainability results
-python explainer_visualizer.py --input_file explainer_results/correlation_analysis.json --output_dir explainer_visualizations
+python explainer_visualizer.py --input_file explainer_results/categorical_association_analysis.json --output_dir explainer_visualizations
 
 # Visualize fairness analysis
 python pgx_fairness_visualizer.py --input_file fairness_analysis.json --output_dir fairness_visualizations
@@ -94,18 +98,17 @@ python pgx_fairness_visualizer.py --input_file fairness_analysis.json --output_d
 
 ## JSON Output
 
-The out of the `explainer.py` script will either be `correlation_analysis.json` or `mutual_information_analysis.json`, depending on sensitivity values:
+The out of the `explainer.py` script will either be `categorical_association_analysis.json` or `mutual_information_analysis.json`, depending on sensitivity values:
 
-### Correlation Analysis
+### Categorical Association Analysis
 
-The `correlation_analysis.json` file has the following structure:
+The `categorical_association_analysis.json` file has the following structure:
 ```json
 {
-  "Gene": "CYP2B6",
-  "Feature": "CYP2C19_rs4244285",
-  "Correlation": 0.3380949063896326,
-  "P_Value": 0.004201971745583072,
-  "Abs_Correlation": 0.3380949063896326
+  "Gene": "CYP2C9",
+  "Feature": "CYP2C19_rs28399504",
+  "Association": 0.9926198253344827,
+  "P_Value": 6.305116760146996e-16
 }
 ```
 
@@ -166,7 +169,7 @@ Add more explanation here regarding fairness
 The analysis produces several types of outputs:
 
 1. **Feature Importance**: Identifies which genetic variants most influence phenotype predictions
-2. **Correlation/Mutual Information Analysis**: Shows relationships between genetic variants and phenotypes
+2. **Categorical Association Analysis / Mutual Information Analysis**: Shows relationships between genetic variants and phenotypes
 3. **Visualizations**: Plots showing the relative importance of features for each gene
 
 ### Fairness Analysis Output
@@ -259,15 +262,15 @@ The `explainer_visualizer.py` and `pgx_fairness_visualizer.py` scripts generate 
 
 ### Explainer Visualizations (`explainer_visualizer.py`)
 
-This script processes the output from `explainer.py` (either correlation or mutual information analysis) and generates:
+This script processes the output from `explainer.py` (either categorical association or mutual information analysis) and generates:
 
 - **Top Features per Gene**: Bar charts showing the 10 most important features for each gene, sorted by:
-  - Correlation magnitude (for correlation analysis)
+  - Association magnitude (for categorical association analysis)
   - Importance score (for mutual information analysis)
 - **Feature Importance Heatmap**: A heatmap visualization showing the relationship between top features and pharmacogenes, using:
-  - "YlOrRd" color map for correlation analysis
+  - "YlOrRd" color map for categorical association analysis
   - "viridis" color map for mutual information analysis
-- **Automatic Analysis Type Detection**: The script automatically determines whether to visualize correlation or mutual information data based on the input file structure
+- **Automatic Analysis Type Detection**: The script automatically determines whether to visualize categorical association or mutual information data based on the input file structure
 
 The visualizations are saved as PNG files in the specified output directory, with one bar chart per gene and a comprehensive heatmap.
 
@@ -294,7 +297,7 @@ The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating 
 
 1. **Download Component**: Downloads project files, input data, demographic and ground truth data from a specified GitHub repository. The pipeline expects the repo to contain the `Demographics/`, `Groundtruth/` and `data/` folders at its root with all required files placed inside.
 2. **PharmCAT Analysis**: Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions. The docker image is built using the provided Dockerfile and all required files and scripts by VITO, and is uploaded to an image hosting repository.
-3. **Explainability Analysis**: Applies either correlation analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
+3. **Explainability Analysis**: Applies either categorical association analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
 4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
 
 **IMPORTANT:** You need to modify the `pharmcat_analysis_docker` function in the `pgx_pipeline_component.py` file to specify your PharmCAT Docker image:
