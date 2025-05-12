@@ -59,8 +59,8 @@ def load_phenotype_data(phenotypes_file):
     return df
 
 
-def load_groundtruth_data(groundtruth_file):
-    df = pd.read_csv(groundtruth_file)
+def load_groundtruth_data(groundtruth_file, delim=';'):
+    df = pd.read_csv(groundtruth_file, delimiter=delim)
     if 'Sample ID' not in df.columns and 'Sample' in df.columns:
         df = df.rename(columns={'Sample': 'Sample ID'})
     elif 'Sample ID' not in df.columns and len(df.columns) > 0:

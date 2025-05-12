@@ -14,8 +14,8 @@ def parse_args():
 
 
 def determine_analysis_type(df):
-    if 'P_Value' in df.columns and 'Correlation' in df.columns:
-        return 'correlation'
+    if 'P_Value' in df.columns and 'Association' in df.columns:
+        return 'categorical_association'
     elif 'Importance' in df.columns:
         return 'mutual_information'
     else:
@@ -45,10 +45,10 @@ def load_data(file_path):
                         for subkey, subvalue in value.items():
                             if isinstance(subvalue, dict):
                                 row = {'Gene': key, 'Feature': subkey}
-                                if 'Correlation' in subvalue:
-                                    row['Correlation'] = subvalue['Correlation']
+                                if 'Association' in subvalue:
+                                    row['Association'] = subvalue['Association']
                                     row['P_Value'] = subvalue.get('P_Value', 0)
-                                    row['Abs_Correlation'] = abs(subvalue['Correlation'])
+                                    row['Abs_Association'] = abs(subvalue['Association'])
                                 elif 'Importance' in subvalue:
                                     row['Importance'] = subvalue['Importance']
                                 flattened_data.append(row)
@@ -64,11 +64,11 @@ def plot_top_features_per_gene(df, gene, output_dir, analysis_type):
         print(f"No data found for gene {gene}, skipping")
         return
 
-    if analysis_type == 'correlation':
-        gene_df = gene_df.sort_values('Abs_Correlation', ascending=False).head(10)
-        importance_col = 'Correlation'
-        title = f'Top Features for {gene} (Correlation)'
-        color_map = gene_df['Correlation'].apply(lambda x: 'red' if x < 0 else 'blue')
+    if analysis_type == 'categorical_association':
+        gene_df = gene_df.sort_values('Abs_Association', ascending=False).head(10)
+        importance_col = 'Association'
+        title = f'Top Features for {gene} (Association)'
+        color_map = gene_df['Association'].apply(lambda x: 'red' if x < 0 else 'blue')
     else:
         gene_df = gene_df.sort_values('Importance', ascending=False).head(10)
         importance_col = 'Importance'
@@ -99,16 +99,16 @@ def create_heatmap(df, output_dir, analysis_type):
         print("No target genes found in the data")
         return
 
-    if analysis_type == 'correlation':
+    if analysis_type == 'categorical_association':
         top_features_per_gene = {}
         for gene in genes_to_use:
             gene_df = df[df['Gene'] == gene]
             if len(gene_df) == 0:
                 continue
-            top_features_per_gene[gene] = gene_df.nlargest(5, 'Abs_Correlation')['Feature'].tolist()
+            top_features_per_gene[gene] = gene_df.nlargest(5, 'Abs_Association')['Feature'].tolist()
 
-        value_col = 'Correlation'
-        title = 'Feature Correlation Heatmap'
+        value_col = 'Association'
+        title = 'Feature Association Heatmap'
         cmap = 'coolwarm'
         center = 0
     else:
@@ -207,10 +207,10 @@ def main():
                     df = df.rename(columns={'importance': 'Importance'})
             elif any(col for col in df.columns if 'corr' in col.lower()):
                 analysis_type = 'correlation'
-                if 'correlation' in df.columns and 'Correlation' not in df.columns:
-                    df = df.rename(columns={'correlation': 'Correlation', 'p_value': 'P_Value'})
-                if 'Correlation' in df.columns and 'Abs_Correlation' not in df.columns:
-                    df['Abs_Correlation'] = df['Correlation'].abs()
+                if 'association' in df.columns and 'Association' not in df.columns:
+                    df = df.rename(columns={'association': 'Association', 'p_value': 'P_Value'})
+                if 'Association' in df.columns and 'Abs_Association' not in df.columns:
+                    df['Abs_Association'] = df['Association'].abs()
             else:
                 print("Could not determine analysis type, assuming mutual_information")
                 analysis_type = 'mutual_information'
