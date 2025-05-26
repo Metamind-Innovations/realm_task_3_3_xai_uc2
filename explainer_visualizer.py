@@ -1,9 +1,10 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import argparse
-import os
 import json
+import os
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 
 
 def parse_args():
@@ -23,22 +24,17 @@ def determine_analysis_type(df):
 
 
 def load_data(file_path):
-    """Load data from either CSV or JSON format"""
     if file_path.endswith('.csv'):
         return pd.read_csv(file_path)
     elif file_path.endswith('.json'):
         with open(file_path, 'r') as f:
             data = json.load(f)
-        # Convert JSON to DataFrame
         if isinstance(data, list):
             return pd.DataFrame(data)
         else:
-            # Handle nested JSON structure
-            # This assumes a specific structure - modify as needed for your actual JSON structure
             if 'results' in data:
                 return pd.DataFrame(data['results'])
             else:
-                # Try to flatten the JSON structure
                 flattened_data = []
                 for key, value in data.items():
                     if isinstance(value, dict):
@@ -48,7 +44,6 @@ def load_data(file_path):
                                 if 'Association' in subvalue:
                                     row['Association'] = subvalue['Association']
                                     row['P_Value'] = subvalue.get('P_Value', 0)
-                                    row['Abs_Association'] = abs(subvalue['Association'])
                                 elif 'Importance' in subvalue:
                                     row['Importance'] = subvalue['Importance']
                                 flattened_data.append(row)
@@ -65,7 +60,7 @@ def plot_top_features_per_gene(df, gene, output_dir, analysis_type):
         return
 
     if analysis_type == 'categorical_association':
-        gene_df = gene_df.sort_values('Abs_Association', ascending=False).head(10)
+        gene_df = gene_df.loc[gene_df['Association'].abs().nlargest(10).index]
         importance_col = 'Association'
         title = f'Top Features for {gene} (Association)'
         color_map = gene_df['Association'].apply(lambda x: 'red' if x < 0 else 'blue')
@@ -105,7 +100,8 @@ def create_heatmap(df, output_dir, analysis_type):
             gene_df = df[df['Gene'] == gene]
             if len(gene_df) == 0:
                 continue
-            top_features_per_gene[gene] = gene_df.nlargest(5, 'Abs_Association')['Feature'].tolist()
+            top_features_per_gene[gene] = gene_df.loc[gene_df['Association'].abs().nlargest(5).index][
+                'Feature'].tolist()
 
         value_col = 'Association'
         title = 'Feature Association Heatmap'
@@ -133,18 +129,15 @@ def create_heatmap(df, output_dir, analysis_type):
         print("No top features found to create heatmap")
         return
 
-    # Filter dataframe for top features
     filtered_df = df[(df['Gene'].isin(genes_to_use)) & (df['Feature'].isin(top_features))]
 
     if len(filtered_df) == 0:
         print("No data available for heatmap after filtering")
         return
 
-    # Create pivot table for heatmap
     try:
         pivot_df = filtered_df.pivot_table(index='Gene', columns='Feature', values=value_col)
 
-        # Handle the case where the pivot table is empty
         if pivot_df.empty:
             print("Pivot table is empty, cannot create heatmap")
             return
@@ -157,7 +150,6 @@ def create_heatmap(df, output_dir, analysis_type):
         plt.close()
     except Exception as e:
         print(f"Error creating heatmap: {e}")
-        # Create a simple alternative visualization
         plt.figure(figsize=(12, 8))
         plt.text(0.5, 0.5, f"Could not create heatmap: {e}",
                  horizontalalignment='center', fontsize=12)
@@ -182,25 +174,21 @@ def main():
         print(f"Loaded dataframe with shape: {df.shape}")
         print(f"Columns: {df.columns.tolist()}")
 
-        # Check if required columns exist
         required_columns = ['Gene', 'Feature']
         if not all(col in df.columns for col in required_columns):
             missing = [col for col in required_columns if col not in df.columns]
             print(f"Missing required columns: {missing}")
-            # Try to adapt to the actual data format
             if 'gene' in df.columns and 'Feature' not in df.columns:
                 df = df.rename(columns={'gene': 'Gene'})
             if 'feature' in df.columns and 'Feature' not in df.columns:
                 df = df.rename(columns={'feature': 'Feature'})
             print(f"Adapted columns: {df.columns.tolist()}")
 
-        # Determine analysis type
         try:
             analysis_type = determine_analysis_type(df)
             print(f"Detected analysis type: {analysis_type}")
         except ValueError as e:
             print(f"Error determining analysis type: {e}")
-            # Try to infer the type from columns
             if any(col for col in df.columns if 'importance' in col.lower()):
                 analysis_type = 'mutual_information'
                 if 'importance' in df.columns and 'Importance' not in df.columns:
@@ -209,15 +197,12 @@ def main():
                 analysis_type = 'correlation'
                 if 'association' in df.columns and 'Association' not in df.columns:
                     df = df.rename(columns={'association': 'Association', 'p_value': 'P_Value'})
-                if 'Association' in df.columns and 'Abs_Association' not in df.columns:
-                    df['Abs_Association'] = df['Association'].abs()
             else:
                 print("Could not determine analysis type, assuming mutual_information")
                 analysis_type = 'mutual_information'
                 if 'value' in df.columns and 'Importance' not in df.columns:
                     df = df.rename(columns={'value': 'Importance'})
                 elif 'importance' not in df.columns and 'Importance' not in df.columns:
-                    # Create a placeholder importance column
                     df['Importance'] = 1.0
             print(f"Inferred analysis type: {analysis_type}")
 
@@ -227,7 +212,6 @@ def main():
 
         if not genes_to_visualize:
             print(f"Warning: None of the target genes found in data. Available genes: {available_genes}")
-            # If no target genes found, use whatever genes are available
             genes_to_visualize = available_genes
 
         print(f"Generating visualizations for genes: {', '.join(genes_to_visualize)}")
@@ -248,7 +232,6 @@ def main():
         print(f"Visualizations saved to {args.output_dir}")
     except Exception as e:
         print(f"An error occurred: {e}")
-        # Create an error image to ensure the component doesn't fail completely
         plt.figure(figsize=(10, 6))
         plt.text(0.5, 0.5, f"Error processing data: {e}",
                  horizontalalignment='center', fontsize=12)
