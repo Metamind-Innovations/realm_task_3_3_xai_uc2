@@ -157,6 +157,126 @@ def visualize_demographic_parity(data, output_dir):
 def create_simple_dashboard(data, output_dir):
     """Create a simple dashboard showing key insights from the data"""
     plt.figure(figsize=(12, 6))
+    # Create a heatmap of equalized odds (FPR) for Superpopulation
+    if 'equalized_odds_metrics' in data:
+        plt.subplot(1, 2, 1)
+        # Collect data for heatmap - keep track of gene-phenotype combinations
+        heatmap_data = {}
+        for gene in data['equalized_odds_metrics']:
+            if 'Superpopulation' in data['equalized_odds_metrics'][gene]:
+                demo_data = data['equalized_odds_metrics'][gene]['Superpopulation']
+                if gene not in heatmap_data:
+                    heatmap_data[gene] = {}
+                for phenotype in demo_data:
+                    if 'error_rates_by_group' in demo_data[phenotype]:
+                        for group, rates in demo_data[phenotype]['error_rates_by_group'].items():
+                            if 'false_positive_rate' in rates and rates['false_positive_rate'] is not None:
+                                # Use maximum FPR across phenotypes for each gene-group combination
+                                if group not in heatmap_data[gene]:
+                                    heatmap_data[gene][group] = rates['false_positive_rate']
+                                else:
+                                    heatmap_data[gene][group] = max(heatmap_data[gene][group],
+                                                                    rates['false_positive_rate'])
+        if heatmap_data:
+            # Convert to DataFrame for heatmap
+            genes = sorted(heatmap_data.keys())
+            groups = sorted(set(group for gene_data in heatmap_data.values() for group in gene_data.keys()))
+            matrix_data = []
+            for gene in genes:
+                row = []
+                for group in groups:
+                    row.append(heatmap_data.get(gene, {}).get(group, 0))
+                matrix_data.append(row)
+            pivot_df = pd.DataFrame(matrix_data, index=genes, columns=groups)
+            if not pivot_df.empty:
+                sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".2f", linewidths=.5)
+                plt.title('False Positive Rate by Gene & Superpopulation')
+            else:
+                plt.text(0.5, 0.5, 'Insufficient data for FPR heatmap',
+                         ha='center', va='center')
+                plt.axis('off')
+        else:
+            plt.text(0.5, 0.5, 'No FPR data available',
+                     ha='center', va='center')
+            plt.axis('off')
+    # Create a heatmap of demographic parity for Superpopulation
+    if 'demographic_parity_metrics' in data:
+        plt.subplot(1, 2, 2)
+        # Collect data for heatmap - for each gene, show the most common phenotype
+        heatmap_data = {}
+        for gene in data['demographic_parity_metrics']:
+            if 'Superpopulation' in data['demographic_parity_metrics'][gene]:
+                demo_data = data['demographic_parity_metrics'][gene]['Superpopulation']
+                if gene not in heatmap_data:
+                    heatmap_data[gene] = {}
+                # Find the phenotype with the most complete data across groups
+                best_phenotype = None
+                best_coverage = 0
+                for phenotype in demo_data:
+                    if 'prediction_rates_by_group' in demo_data[phenotype]:
+                        coverage = len(demo_data[phenotype]['prediction_rates_by_group'])
+                        if coverage > best_coverage:
+                            best_coverage = coverage
+                            best_phenotype = phenotype
+                # Use the best phenotype's data
+                if best_phenotype:
+                    for group, rate in demo_data[best_phenotype]['prediction_rates_by_group'].items():
+                        heatmap_data[gene][group] = rate
+        if heatmap_data:
+            # Convert to DataFrame for heatmap
+            genes = sorted(heatmap_data.keys())
+            groups = sorted(set(group for gene_data in heatmap_data.values() for group in gene_data.keys()))
+            matrix_data = []
+            for gene in genes:
+                row = []
+                for group in groups:
+                    row.append(heatmap_data.get(gene, {}).get(group, 0))
+                matrix_data.append(row)
+            pivot_df = pd.DataFrame(matrix_data, index=genes, columns=groups)
+            if not pivot_df.empty:
+                sns.heatmap(pivot_df, cmap="YlGnBu", annot=True, fmt=".2f", linewidths=.5)
+                plt.title('Prediction Rate by Gene & Superpopulation')
+            else:
+                plt.text(0.5, 0.5, 'Insufficient data for prediction rate heatmap',
+                         ha='center', va='center')
+                plt.axis('off')
+        else:
+            plt.text(0.5, 0.5, 'No prediction rate data available',
+                     ha='center', va='center')
+            plt.axis('off')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'fairness_summary_dashboard.png'))
+    plt.close()
+
+
+def create_metabolizer_dashboards(data, output_dir):
+    """Create separate dashboards for each metabolizer type"""
+
+    # Collect all metabolizers from the data
+    metabolizers = set()
+
+    # Extract metabolizers from equalized odds metrics
+    if 'equalized_odds_metrics' in data:
+        for gene in data['equalized_odds_metrics']:
+            if 'Superpopulation' in data['equalized_odds_metrics'][gene]:
+                demo_data = data['equalized_odds_metrics'][gene]['Superpopulation']
+                metabolizers.update(demo_data.keys())
+
+    # Extract metabolizers from demographic parity metrics
+    if 'demographic_parity_metrics' in data:
+        for gene in data['demographic_parity_metrics']:
+            if 'Superpopulation' in data['demographic_parity_metrics'][gene]:
+                demo_data = data['demographic_parity_metrics'][gene]['Superpopulation']
+                metabolizers.update(demo_data.keys())
+
+    # Create a dashboard for each metabolizer
+    for metabolizer in metabolizers:
+        create_metabolizer_dashboard(data, metabolizer, output_dir)
+
+
+def create_metabolizer_dashboard(data, metabolizer, output_dir):
+    """Create a dashboard for a specific metabolizer type"""
+    plt.figure(figsize=(12, 6))
 
     # Create a heatmap of equalized odds (FPR) for Superpopulation
     if 'equalized_odds_metrics' in data:
@@ -169,21 +289,19 @@ def create_simple_dashboard(data, output_dir):
             if 'Superpopulation' in data['equalized_odds_metrics'][gene]:
                 demo_data = data['equalized_odds_metrics'][gene]['Superpopulation']
 
-                for phenotype in demo_data:
-                    if 'error_rates_by_group' in demo_data[phenotype]:
-                        for group, rates in demo_data[phenotype]['error_rates_by_group'].items():
-                            if 'false_positive_rate' in rates and rates['false_positive_rate'] is not None:
-                                heatmap_data.append({
-                                    'Gene': gene,
-                                    'Phenotype': phenotype,
-                                    'Group': group,
-                                    'FPR': rates['false_positive_rate']
-                                })
+                if metabolizer in demo_data and 'error_rates_by_group' in demo_data[metabolizer]:
+                    for group, rates in demo_data[metabolizer]['error_rates_by_group'].items():
+                        if 'false_positive_rate' in rates and rates['false_positive_rate'] is not None:
+                            heatmap_data.append({
+                                'Gene': gene,
+                                'Group': group,
+                                'FPR': rates['false_positive_rate']
+                            })
 
         if heatmap_data:
             df = pd.DataFrame(heatmap_data)
 
-            # For simplicity, just show average FPR by gene and group
+            # Create pivot table for heatmap
             pivot_df = df.pivot_table(
                 index='Gene',
                 columns='Group',
@@ -193,13 +311,13 @@ def create_simple_dashboard(data, output_dir):
 
             if not pivot_df.empty:
                 sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".2f", linewidths=.5)
-                plt.title('Avg False Positive Rate by Gene & Superpopulation')
+                plt.title(f'False Positive Rate by Gene & Superpopulation ({metabolizer})')
             else:
-                plt.text(0.5, 0.5, 'Insufficient data for FPR heatmap',
+                plt.text(0.5, 0.5, f'Insufficient data for FPR heatmap for {metabolizer}',
                          ha='center', va='center')
                 plt.axis('off')
         else:
-            plt.text(0.5, 0.5, 'No FPR data available',
+            plt.text(0.5, 0.5, f'No FPR data available for {metabolizer}',
                      ha='center', va='center')
             plt.axis('off')
 
@@ -214,20 +332,18 @@ def create_simple_dashboard(data, output_dir):
             if 'Superpopulation' in data['demographic_parity_metrics'][gene]:
                 demo_data = data['demographic_parity_metrics'][gene]['Superpopulation']
 
-                for phenotype in demo_data:
-                    if 'prediction_rates_by_group' in demo_data[phenotype]:
-                        for group, rate in demo_data[phenotype]['prediction_rates_by_group'].items():
-                            heatmap_data.append({
-                                'Gene': gene,
-                                'Phenotype': phenotype,
-                                'Group': group,
-                                'Rate': rate
-                            })
+                if metabolizer in demo_data and 'prediction_rates_by_group' in demo_data[metabolizer]:
+                    for group, rate in demo_data[metabolizer]['prediction_rates_by_group'].items():
+                        heatmap_data.append({
+                            'Gene': gene,
+                            'Group': group,
+                            'Rate': rate
+                        })
 
         if heatmap_data:
             df = pd.DataFrame(heatmap_data)
 
-            # For simplicity, just show average prediction rate by gene and group
+            # Create pivot table for heatmap
             pivot_df = df.pivot_table(
                 index='Gene',
                 columns='Group',
@@ -237,18 +353,19 @@ def create_simple_dashboard(data, output_dir):
 
             if not pivot_df.empty:
                 sns.heatmap(pivot_df, cmap="YlGnBu", annot=True, fmt=".2f", linewidths=.5)
-                plt.title('Avg Prediction Rate by Gene & Superpopulation')
+                plt.title(f'Prediction Rate by Gene & Superpopulation ({metabolizer})')
             else:
-                plt.text(0.5, 0.5, 'Insufficient data for prediction rate heatmap',
+                plt.text(0.5, 0.5, f'Insufficient data for prediction rate heatmap for {metabolizer}',
                          ha='center', va='center')
                 plt.axis('off')
         else:
-            plt.text(0.5, 0.5, 'No prediction rate data available',
+            plt.text(0.5, 0.5, f'No prediction rate data available for {metabolizer}',
                      ha='center', va='center')
             plt.axis('off')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'fairness_summary_dashboard.png'))
+    safe_metabolizer = str(metabolizer).replace('/', '_').replace('\\', '_').replace(' ', '_')
+    plt.savefig(os.path.join(output_dir, f'metabolizer_{safe_metabolizer}_dashboard.png'))
     plt.close()
 
 
@@ -265,6 +382,7 @@ def main():
         visualize_equalized_odds(data, output_dir)
         visualize_demographic_parity(data, output_dir)
         create_simple_dashboard(data, output_dir)
+        create_metabolizer_dashboards(data, output_dir)
 
         print(f"All visualizations saved to {output_dir}")
     except Exception as e:
