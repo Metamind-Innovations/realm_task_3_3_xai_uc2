@@ -1,11 +1,11 @@
-import os
-import pandas as pd
-import numpy as np
 import argparse
 import json
-from scipy.stats import pointbiserialr, spearmanr
-from sklearn.feature_selection import mutual_info_classif
+import os
 from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+from sklearn.feature_selection import mutual_info_classif
 
 
 def load_data(input_file, output_file):
