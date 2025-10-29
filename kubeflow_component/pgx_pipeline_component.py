@@ -66,6 +66,8 @@ def download_project(
             "phenotype_mapper.py",
             "explainer.py",
             "fairness_bias_analyzer.py",
+            "explainer_visualizer.py",
+            "pgx_fairness_visualizer.py",
             "requirements.txt"
         ],
         "input_data": ["data"],
@@ -146,8 +148,8 @@ def pharmcat_analysis_docker(
 ):
     command_str = f"mkdir -p '{result_folder.path}' && python3 -u /scripts/pharmcat_folder_processor.py --input_folder '{input_folder.path}' --result_folder '{result_folder.path}'"
     return dsl.ContainerSpec(
-        image="<your_docker_pharmcat_image>",
         # Insert your Docker image here (e.g. "docker.io/<username>/pharmcat-realm:latest")
+        image="<your_docker_image>",
         command=["sh", "-c"],
         args=[command_str]
     )
@@ -289,7 +291,6 @@ def run_explainer(
 
     input_file = csv_data_path / "encoded.csv"
     if not input_file.is_file():
-        # Try to find encoded.csv in subdirectories
         input_files = list(csv_data_path.glob("**/encoded.csv"))
         if input_files:
             input_file = input_files[0]
@@ -299,7 +300,6 @@ def run_explainer(
 
     output_file = encoded_phenotypes_path / "phenotypes_encoded.csv"
     if not output_file.is_file():
-        # Try to find phenotypes_encoded.csv in subdirectories
         output_files = list(encoded_phenotypes_path.glob("**/phenotypes_encoded.csv"))
         if output_files:
             output_file = output_files[0]
@@ -422,6 +422,122 @@ def fairness_bias_analyzer(
     print(f"Fairness analysis successful. Output saved to {output_file}")
 
 
+@kfp.dsl.component(
+    base_image="python:3.10-slim",
+    packages_to_install=["pandas", "matplotlib", "seaborn"]
+)
+def explainer_visualizer(
+        project_files: Input[Model],
+        explainer_results: Input[Dataset],
+        visualizations: Output[Dataset]
+):
+    import subprocess
+    from pathlib import Path
+
+    project_files_path = Path(project_files.path)
+    explainer_results_path = Path(explainer_results.path)
+    visualizations_path = Path(visualizations.path)
+
+    visualizations_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created visualizations output directory: {visualizations_path}")
+
+    visualizer_script = project_files_path / "explainer_visualizer.py"
+    if not visualizer_script.is_file():
+        raise Exception(f"Visualizer script not found at {visualizer_script}")
+
+    print(f"Found visualizer script: {visualizer_script}")
+
+    json_files = list(explainer_results_path.glob("*.json"))
+    if not json_files:
+        json_files = list(explainer_results_path.glob("**/*.json"))
+
+    if not json_files:
+        raise Exception(f"No JSON files found in {explainer_results_path}")
+
+    input_file = json_files[0]
+    print(f"Found explainer results file: {input_file}")
+
+    command = [
+        "python", str(visualizer_script),
+        "--input_file", str(input_file),
+        "--output_dir", str(visualizations_path)
+    ]
+
+    print(f"\nRunning explainer visualizer: {' '.join(command)}")
+
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("Explainer visualization completed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during explainer visualization: {e.stdout}\n{e.stderr}")
+        raise Exception("Explainer visualization failed.")
+
+    png_files = list(visualizations_path.glob("*.png"))
+    if not png_files:
+        raise Exception(f"No visualization PNG files found in {visualizations_path}")
+
+    print(f"Explainer visualization successful. {len(png_files)} images saved to {visualizations_path}")
+
+
+@kfp.dsl.component(
+    base_image="python:3.10-slim",
+    packages_to_install=["pandas", "matplotlib", "seaborn"]
+)
+def fairness_visualizer(
+        project_files: Input[Model],
+        fairness_results: Input[Dataset],
+        visualizations: Output[Dataset]
+):
+    import subprocess
+    from pathlib import Path
+
+    project_files_path = Path(project_files.path)
+    fairness_results_path = Path(fairness_results.path)
+    visualizations_path = Path(visualizations.path)
+
+    visualizations_path.mkdir(parents=True, exist_ok=True)
+    print(f"Created visualizations output directory: {visualizations_path}")
+
+    visualizer_script = project_files_path / "pgx_fairness_visualizer.py"
+    if not visualizer_script.is_file():
+        raise Exception(f"Visualizer script not found at {visualizer_script}")
+
+    print(f"Found visualizer script: {visualizer_script}")
+
+    json_file = fairness_results_path / "fairness_analysis.json"
+    if not json_file.is_file():
+        json_files = list(fairness_results_path.glob("*.json"))
+        if not json_files:
+            json_files = list(fairness_results_path.glob("**/*.json"))
+        if json_files:
+            json_file = json_files[0]
+        else:
+            raise Exception(f"Fairness analysis JSON file not found in {fairness_results_path}")
+
+    print(f"Found fairness results file: {json_file}")
+
+    command = [
+        "python", str(visualizer_script),
+        "--input_file", str(json_file),
+        "--output_dir", str(visualizations_path)
+    ]
+
+    print(f"\nRunning fairness visualizer: {' '.join(command)}")
+
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("Fairness visualization completed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Error during fairness visualization: {e.stdout}\n{e.stderr}")
+        raise Exception("Fairness visualization failed.")
+
+    png_files = list(visualizations_path.glob("*.png"))
+    if not png_files:
+        raise Exception(f"No visualization PNG files found in {visualizations_path}")
+
+    print(f"Fairness visualization successful. {len(png_files)} images saved to {visualizations_path}")
+
+
 @kfp.dsl.pipeline(
     name="PharmCAT PGx Analysis Pipeline",
     description="Pipeline for pharmacogenomic analysis using PharmCAT and SHAP"
@@ -439,10 +555,10 @@ def pharmcat_pipeline(
         input_folder=download_task.outputs["input_data"]
     )
     pharmcat_task.set_caching_options(False)
-    pharmcat_task.set_cpu_request("2")
-    pharmcat_task.set_cpu_limit("4")
-    pharmcat_task.set_memory_request("4G")
-    pharmcat_task.set_memory_limit("8G")
+    pharmcat_task.set_cpu_request("4")
+    pharmcat_task.set_cpu_limit("8")
+    pharmcat_task.set_memory_request("8G")
+    pharmcat_task.set_memory_limit("16G")
 
     vcf_to_csv_task = vcf_to_csv(
         project_files=download_task.outputs["project_files"],
@@ -487,6 +603,26 @@ def pharmcat_pipeline(
     fairness_task.set_cpu_limit("2")
     fairness_task.set_memory_request("2G")
     fairness_task.set_memory_limit("4G")
+
+    explainer_viz_task = explainer_visualizer(
+        project_files=download_task.outputs["project_files"],
+        explainer_results=explainer_task.outputs["explainer_results"]
+    )
+    explainer_viz_task.set_caching_options(False)
+    explainer_viz_task.set_cpu_request("1")
+    explainer_viz_task.set_cpu_limit("2")
+    explainer_viz_task.set_memory_request("2G")
+    explainer_viz_task.set_memory_limit("4G")
+
+    fairness_viz_task = fairness_visualizer(
+        project_files=download_task.outputs["project_files"],
+        fairness_results=fairness_task.outputs["fairness_results"]
+    )
+    fairness_viz_task.set_caching_options(False)
+    fairness_viz_task.set_cpu_request("1")
+    fairness_viz_task.set_cpu_limit("2")
+    fairness_viz_task.set_memory_request("2G")
+    fairness_viz_task.set_memory_limit("4G")
 
 
 if __name__ == "__main__":
