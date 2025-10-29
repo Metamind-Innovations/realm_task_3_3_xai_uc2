@@ -432,6 +432,7 @@ def explainer_visualizer(
         visualizations: Output[Dataset]
 ):
     import subprocess
+    import os
     from pathlib import Path
 
     project_files_path = Path(project_files.path)
@@ -457,6 +458,9 @@ def explainer_visualizer(
     input_file = json_files[0]
     print(f"Found explainer results file: {input_file}")
 
+    env = os.environ.copy()
+    env['MPLBACKEND'] = 'Agg'
+
     command = [
         "python", str(visualizer_script),
         "--input_file", str(input_file),
@@ -466,8 +470,12 @@ def explainer_visualizer(
     print(f"\nRunning explainer visualizer: {' '.join(command)}")
 
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        print("Explainer visualization completed successfully.")
+        result = subprocess.run(command, check=True, capture_output=True, text=True, env=env)
+        if result.stdout:
+            print(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            print(f"STDERR:\n{result.stderr}")
+        print("Explainer visualization subprocess completed.")
     except subprocess.CalledProcessError as e:
         print(f"Error during explainer visualization: {e.stdout}\n{e.stderr}")
         raise Exception("Explainer visualization failed.")
@@ -489,6 +497,7 @@ def fairness_visualizer(
         visualizations: Output[Dataset]
 ):
     import subprocess
+    import os
     from pathlib import Path
 
     project_files_path = Path(project_files.path)
@@ -516,6 +525,9 @@ def fairness_visualizer(
 
     print(f"Found fairness results file: {json_file}")
 
+    env = os.environ.copy()
+    env['MPLBACKEND'] = 'Agg'
+
     command = [
         "python", str(visualizer_script),
         "--input_file", str(json_file),
@@ -525,8 +537,12 @@ def fairness_visualizer(
     print(f"\nRunning fairness visualizer: {' '.join(command)}")
 
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        print("Fairness visualization completed successfully.")
+        result = subprocess.run(command, check=True, capture_output=True, text=True, env=env)
+        if result.stdout:
+            print(f"STDOUT:\n{result.stdout}")
+        if result.stderr:
+            print(f"STDERR:\n{result.stderr}")
+        print("Fairness visualization subprocess completed.")
     except subprocess.CalledProcessError as e:
         print(f"Error during fairness visualization: {e.stdout}\n{e.stderr}")
         raise Exception("Fairness visualization failed.")
