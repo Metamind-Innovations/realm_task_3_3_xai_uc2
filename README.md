@@ -295,10 +295,14 @@ This script processes the output from `fairness_bias_analyzer.py` and generates:
 
 The `pgx_pipeline_component.py` file defines a Kubeflow pipeline for automating the pharmacogenomics analysis workflow. This pipeline orchestrates the following components:
 
-1. **Download Component**: Downloads project files, input data, demographic and ground truth data from a specified GitHub repository. The pipeline expects the repo to contain the `Demographics/`, `Groundtruth/` and `data/` folders at its root with all required files placed inside.
-2. **PharmCAT Analysis**: Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions. The docker image is built using the provided Dockerfile and all required files and scripts by VITO, and is uploaded to an image hosting repository.
-3. **Explainability Analysis**: Applies either categorical association analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
-4. **Fairness Analysis**: Evaluates potential bias in the PharmCAT predictions across demographic groups.
+1. **Download Component** (`download_project`): Downloads project files, input data, demographic and ground truth data from a specified GitHub repository. The pipeline expects the repo to contain the `Demographics/`, `Groundtruth/` and `data/` folders at its root with all required files placed inside.
+2. **PharmCAT Analysis** (`pharmcat_analysis_docker`): Executes the PharmCAT analysis in a Docker container, processing VCF files and generating phenotype predictions. The docker image is built using the provided Dockerfile and all required files and scripts by VITO, and is uploaded to an image hosting repository.
+3. **VCF to CSV Conversion** (`vcf_to_csv`): Converts VCF genetic data files to analyzable CSV format by extracting essential genetic variant information.
+4. **Phenotype Mapping** (`phenotype_mapper`): Maps PharmCAT phenotype predictions to numeric values for downstream analysis.
+5. **Explainability Analysis** (`run_explainer`): Applies either categorical association analysis or mutual information analysis based on the input sensitivity value, to explain the PharmCAT predictions.
+6. **Fairness Analysis** (`fairness_bias_analyzer`): Evaluates potential bias in the PharmCAT predictions across demographic groups.
+7. **Explainer Visualization** (`explainer_visualizer`): Generates visual representations of the explainability analysis results, including feature importance plots and heatmaps.
+8. **Fairness Visualization** (`fairness_visualizer`): Creates visual representations of fairness metrics, including equalized odds and demographic parity visualizations.
 
 **IMPORTANT:** You need to modify the `pharmcat_analysis_docker` function in the `pgx_pipeline_component.py` file to specify your PharmCAT Docker image:
 
