@@ -3,40 +3,21 @@ import json
 import os
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
-# Color mappings for consistent visualization
-PHENOTYPE_COLORS = {
-    'PM': '#FF5555',  # Poor - Red
-    'IM': '#FFA500',  # Intermediate - Orange
-    'NM': '#55AA55',  # Normal - Green
-    'RM': '#5555FF',  # Rapid - Blue
-    'UM': '#AA55AA',  # Ultra Rapid - Purple
-    'PF': '#FF5555',  # Poor - Red
-    'DF': '#FFA500',  # Decreased - Orange
-    'NF': '#55AA55',  # Normal - Green
-    'IF': '#5555FF',  # Increased - Blue
-    'INDETERMINATE': '#AAAAAA',  # Gray
-    ' ': '#CCCCCC'  # Light Gray for empty phenotype
-}
-
-GENE_COLORS = {
-    'CYP2B6': '#E41A1C',
-    'CYP2C9': '#377EB8',
-    'CYP2C19': '#4DAF4A',
-    'CYP3A5': '#984EA3',
-    'SLCO1B1': '#FF7F00',
-    'TPMT': '#FFFF33',
-    'DPYD': '#A65628'
-}
-
 SUPERPOPULATION_COLORS = {
-    'AFR': '#66C2A5',  # African
-    'AMR': '#FC8D62',  # Ad Mixed American
-    'EAS': '#8DA0CB',  # East Asian
-    'EUR': '#E78AC3',  # European
-    'SAS': '#A6D854'  # South Asian
+    'AFR': '#66C2A5',
+    'AMR': '#FC8D62',
+    'EAS': '#8DA0CB',
+    'EUR': '#E78AC3',
+    'SAS': '#A6D854'
+}
+
+SEX_COLORS = {
+    'F': '#FF69B4',
+    'M': '#4169E1'
 }
 
 
@@ -58,319 +39,198 @@ def ensure_output_dir(output_dir):
     return output_dir
 
 
-def visualize_equalized_odds(data, output_dir):
-    """Visualize the equalized odds metrics (false positive rates by demographic groups)"""
-    if 'equalized_odds_metrics' not in data:
-        return
+def extract_average_metrics(data, demographic_key):
+    fpr_data = {}
+    prediction_data = {}
 
-    odds_metrics = data['equalized_odds_metrics']
-
-    for gene, gene_data in odds_metrics.items():
-        for demographic, demo_data in gene_data.items():
-            # Only visualize superpopulation for clarity
-            if demographic != 'Superpopulation':
-                continue
-
-            for phenotype, pheno_data in demo_data.items():
-                if 'error_rates_by_group' not in pheno_data or len(pheno_data['error_rates_by_group']) < 2:
-                    continue
-
-                # Extract false positive rates
-                groups = []
-                fpr_values = []
-
-                for group, rates in pheno_data['error_rates_by_group'].items():
-                    if 'false_positive_rate' in rates and rates['false_positive_rate'] is not None:
-                        groups.append(group)
-                        fpr_values.append(rates['false_positive_rate'])
-
-                if not groups:
-                    continue
-
-                plt.figure(figsize=(10, 6))
-
-                # Use superpopulation colors if available
-                colors = [SUPERPOPULATION_COLORS.get(group, '#AAAAAA') for group in groups]
-
-                # Create bar chart for false positive rates
-                bars = plt.bar(groups, fpr_values, color=colors)
-
-                # Annotate bars
-                for bar, rate in zip(bars, fpr_values):
-                    height = bar.get_height()
-                    plt.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
-                             f"{rate:.2f}", ha='center', va='bottom')
-
-                plt.title(f'{gene} {phenotype} False Positive Rate by {demographic}')
-                plt.xlabel(demographic)
-                plt.ylabel('False Positive Rate')
-                plt.xticks(rotation=45, ha='right')
-                plt.tight_layout()
-
-                plt.savefig(os.path.join(output_dir, f'fpr_{gene}_{phenotype}_by_{demographic}.png'))
-                plt.close()
-
-
-def visualize_demographic_parity(data, output_dir):
-    """Visualize the demographic parity metrics (prediction rates by demographic groups)"""
-    if 'demographic_parity_metrics' not in data:
-        return
-
-    parity_metrics = data['demographic_parity_metrics']
-
-    for gene, gene_data in parity_metrics.items():
-        for demographic, demo_data in gene_data.items():
-            # Only visualize superpopulation for clarity
-            if demographic != 'Superpopulation':
-                continue
-
-            for phenotype, pheno_data in demo_data.items():
-                if 'prediction_rates_by_group' not in pheno_data or len(pheno_data['prediction_rates_by_group']) < 2:
-                    continue
-
-                groups = list(pheno_data['prediction_rates_by_group'].keys())
-                rates = list(pheno_data['prediction_rates_by_group'].values())
-
-                plt.figure(figsize=(10, 6))
-
-                # Use superpopulation colors if available
-                colors = [SUPERPOPULATION_COLORS.get(group, '#AAAAAA') for group in groups]
-
-                bars = plt.bar(groups, rates, color=colors)
-
-                # Annotate bars
-                for bar, rate in zip(bars, rates):
-                    height = bar.get_height()
-                    plt.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
-                             f"{rate:.2f}", ha='center', va='bottom')
-
-                plt.title(f'{gene} {phenotype} Prediction Rate by {demographic}')
-                plt.xlabel(demographic)
-                plt.ylabel('Prediction Rate')
-                plt.xticks(rotation=45, ha='right')
-                plt.tight_layout()
-
-                plt.savefig(os.path.join(output_dir, f'prediction_rate_{gene}_{phenotype}_by_{demographic}.png'))
-                plt.close()
-
-
-def create_simple_dashboard(data, output_dir):
-    """Create a simple dashboard showing key insights from the data"""
-    plt.figure(figsize=(12, 6))
-    # Create a heatmap of equalized odds (FPR) for Superpopulation
     if 'equalized_odds_metrics' in data:
-        plt.subplot(1, 2, 1)
-        # Collect data for heatmap - keep track of gene-phenotype combinations
-        heatmap_data = {}
-        for gene in data['equalized_odds_metrics']:
-            if 'Superpopulation' in data['equalized_odds_metrics'][gene]:
-                demo_data = data['equalized_odds_metrics'][gene]['Superpopulation']
-                if gene not in heatmap_data:
-                    heatmap_data[gene] = {}
-                for phenotype in demo_data:
-                    if 'error_rates_by_group' in demo_data[phenotype]:
-                        for group, rates in demo_data[phenotype]['error_rates_by_group'].items():
+        for gene, gene_data in data['equalized_odds_metrics'].items():
+            if demographic_key in gene_data:
+                demo_data = gene_data[demographic_key]
+                fpr_by_group = {}
+
+                for phenotype, pheno_data in demo_data.items():
+                    if 'error_rates_by_group' in pheno_data:
+                        for group, rates in pheno_data['error_rates_by_group'].items():
                             if 'false_positive_rate' in rates and rates['false_positive_rate'] is not None:
-                                # Use maximum FPR across phenotypes for each gene-group combination
-                                if group not in heatmap_data[gene]:
-                                    heatmap_data[gene][group] = rates['false_positive_rate']
-                                else:
-                                    heatmap_data[gene][group] = max(heatmap_data[gene][group],
-                                                                    rates['false_positive_rate'])
-        if heatmap_data:
-            # Convert to DataFrame for heatmap
-            genes = sorted(heatmap_data.keys())
-            groups = sorted(set(group for gene_data in heatmap_data.values() for group in gene_data.keys()))
-            matrix_data = []
-            for gene in genes:
-                row = []
-                for group in groups:
-                    row.append(heatmap_data.get(gene, {}).get(group, 0))
-                matrix_data.append(row)
-            pivot_df = pd.DataFrame(matrix_data, index=genes, columns=groups)
-            if not pivot_df.empty:
-                sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".2f", linewidths=.5)
-                plt.title('False Positive Rate by Gene & Superpopulation')
-            else:
-                plt.text(0.5, 0.5, 'Insufficient data for FPR heatmap',
-                         ha='center', va='center')
-                plt.axis('off')
-        else:
-            plt.text(0.5, 0.5, 'No FPR data available',
-                     ha='center', va='center')
-            plt.axis('off')
-    # Create a heatmap of demographic parity for Superpopulation
+                                if group not in fpr_by_group:
+                                    fpr_by_group[group] = []
+                                fpr_by_group[group].append(rates['false_positive_rate'])
+
+                for group, values in fpr_by_group.items():
+                    if gene not in fpr_data:
+                        fpr_data[gene] = {}
+                    fpr_data[gene][group] = np.mean(values)
+
     if 'demographic_parity_metrics' in data:
-        plt.subplot(1, 2, 2)
-        # Collect data for heatmap - for each gene, show the most common phenotype
-        heatmap_data = {}
-        for gene in data['demographic_parity_metrics']:
-            if 'Superpopulation' in data['demographic_parity_metrics'][gene]:
-                demo_data = data['demographic_parity_metrics'][gene]['Superpopulation']
-                if gene not in heatmap_data:
-                    heatmap_data[gene] = {}
-                # Find the phenotype with the most complete data across groups
-                best_phenotype = None
-                best_coverage = 0
-                for phenotype in demo_data:
-                    if 'prediction_rates_by_group' in demo_data[phenotype]:
-                        coverage = len(demo_data[phenotype]['prediction_rates_by_group'])
-                        if coverage > best_coverage:
-                            best_coverage = coverage
-                            best_phenotype = phenotype
-                # Use the best phenotype's data
-                if best_phenotype:
-                    for group, rate in demo_data[best_phenotype]['prediction_rates_by_group'].items():
-                        heatmap_data[gene][group] = rate
-        if heatmap_data:
-            # Convert to DataFrame for heatmap
-            genes = sorted(heatmap_data.keys())
-            groups = sorted(set(group for gene_data in heatmap_data.values() for group in gene_data.keys()))
-            matrix_data = []
-            for gene in genes:
-                row = []
-                for group in groups:
-                    row.append(heatmap_data.get(gene, {}).get(group, 0))
-                matrix_data.append(row)
-            pivot_df = pd.DataFrame(matrix_data, index=genes, columns=groups)
-            if not pivot_df.empty:
-                sns.heatmap(pivot_df, cmap="YlGnBu", annot=True, fmt=".2f", linewidths=.5)
-                plt.title('Prediction Rate by Gene & Superpopulation')
+        for gene, gene_data in data['demographic_parity_metrics'].items():
+            if demographic_key in gene_data:
+                demo_data = gene_data[demographic_key]
+                pred_by_group = {}
+
+                for phenotype, pheno_data in demo_data.items():
+                    if 'prediction_rates_by_group' in pheno_data:
+                        for group, rate in pheno_data['prediction_rates_by_group'].items():
+                            if group not in pred_by_group:
+                                pred_by_group[group] = []
+                            pred_by_group[group].append(rate)
+
+                for group, values in pred_by_group.items():
+                    if gene not in prediction_data:
+                        prediction_data[gene] = {}
+                    prediction_data[gene][group] = np.mean(values)
+
+    return fpr_data, prediction_data
+
+
+def calculate_disparity(metrics_dict):
+    disparity = {}
+    for gene, groups in metrics_dict.items():
+        if len(groups) >= 2:
+            values = list(groups.values())
+            disparity[gene] = max(values) - min(values)
+    return disparity
+
+
+def create_consolidated_visualization(data, demographic_key, output_dir, ethnicity_mapping=None):
+    fairness_method = data.get('metadata', {}).get('fairness_method', 'calculate_equalized_odds')
+    bias_method = data.get('metadata', {}).get('bias_method', 'calculate_demographic_parity')
+
+    fpr_data, prediction_data = extract_average_metrics(data, demographic_key)
+
+    if not fpr_data and not prediction_data:
+        print(f"No data available for demographic: {demographic_key}")
+        return
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle(f'Fairness and Bias Analysis by {demographic_key}', fontsize=16, fontweight='bold')
+
+    target_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
+
+    if fpr_data:
+        genes = sorted([g for g in target_genes if g in fpr_data])
+        if demographic_key == 'Superpopulation':
+            groups = sorted(set(group for gene_data in fpr_data.values() for group in gene_data.keys()))
+            if ethnicity_mapping:
+                group_labels = [ethnicity_mapping.get(g, g) for g in groups]
             else:
-                plt.text(0.5, 0.5, 'Insufficient data for prediction rate heatmap',
-                         ha='center', va='center')
-                plt.axis('off')
+                group_labels = groups
         else:
-            plt.text(0.5, 0.5, 'No prediction rate data available',
-                     ha='center', va='center')
-            plt.axis('off')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'fairness_summary_dashboard.png'))
-    plt.close()
+            groups = sorted(set(group for gene_data in fpr_data.values() for group in gene_data.keys()))
+            group_labels = groups
 
+        matrix_data = []
+        for gene in genes:
+            row = []
+            for group in groups:
+                row.append(fpr_data.get(gene, {}).get(group, 0))
+            matrix_data.append(row)
 
-def create_metabolizer_dashboards(data, output_dir):
-    """Create separate dashboards for each metabolizer type"""
+        if matrix_data:
+            pivot_df = pd.DataFrame(matrix_data, index=genes, columns=group_labels)
+            sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".3f", linewidths=.5, ax=axes[0, 0],
+                        cbar_kws={'label': 'FPR'})
+            axes[0, 0].set_title(f'Fairness calculation using {fairness_method}\nby Gene & {demographic_key}',
+                                 fontsize=12, fontweight='bold')
+            axes[0, 0].set_xlabel(demographic_key)
+            axes[0, 0].set_ylabel('Gene')
+        else:
+            axes[0, 0].text(0.5, 0.5, 'No FPR data available', ha='center', va='center')
+            axes[0, 0].axis('off')
+    else:
+        axes[0, 0].text(0.5, 0.5, 'No FPR data available', ha='center', va='center')
+        axes[0, 0].axis('off')
 
-    # Collect all metabolizers from the data
-    metabolizers = set()
-
-    # Extract metabolizers from equalized odds metrics
-    if 'equalized_odds_metrics' in data:
-        for gene in data['equalized_odds_metrics']:
-            if 'Superpopulation' in data['equalized_odds_metrics'][gene]:
-                demo_data = data['equalized_odds_metrics'][gene]['Superpopulation']
-                metabolizers.update(demo_data.keys())
-
-    # Extract metabolizers from demographic parity metrics
-    if 'demographic_parity_metrics' in data:
-        for gene in data['demographic_parity_metrics']:
-            if 'Superpopulation' in data['demographic_parity_metrics'][gene]:
-                demo_data = data['demographic_parity_metrics'][gene]['Superpopulation']
-                metabolizers.update(demo_data.keys())
-
-    # Create a dashboard for each metabolizer
-    for metabolizer in metabolizers:
-        create_metabolizer_dashboard(data, metabolizer, output_dir)
-
-
-def create_metabolizer_dashboard(data, metabolizer, output_dir):
-    """Create a dashboard for a specific metabolizer type"""
-    plt.figure(figsize=(12, 6))
-
-    # Create a heatmap of equalized odds (FPR) for Superpopulation
-    if 'equalized_odds_metrics' in data:
-        plt.subplot(1, 2, 1)
-
-        # Collect data for heatmap
-        heatmap_data = []
-
-        for gene in data['equalized_odds_metrics']:
-            if 'Superpopulation' in data['equalized_odds_metrics'][gene]:
-                demo_data = data['equalized_odds_metrics'][gene]['Superpopulation']
-
-                if metabolizer in demo_data and 'error_rates_by_group' in demo_data[metabolizer]:
-                    for group, rates in demo_data[metabolizer]['error_rates_by_group'].items():
-                        if 'false_positive_rate' in rates and rates['false_positive_rate'] is not None:
-                            heatmap_data.append({
-                                'Gene': gene,
-                                'Group': group,
-                                'FPR': rates['false_positive_rate']
-                            })
-
-        if heatmap_data:
-            df = pd.DataFrame(heatmap_data)
-
-            # Create pivot table for heatmap
-            pivot_df = df.pivot_table(
-                index='Gene',
-                columns='Group',
-                values='FPR',
-                aggfunc='mean'
-            )
-
-            if not pivot_df.empty:
-                sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".2f", linewidths=.5)
-                plt.title(f'False Positive Rate by Gene & Superpopulation ({metabolizer})')
+    if prediction_data:
+        genes = sorted([g for g in target_genes if g in prediction_data])
+        if demographic_key == 'Superpopulation':
+            groups = sorted(set(group for gene_data in prediction_data.values() for group in gene_data.keys()))
+            if ethnicity_mapping:
+                group_labels = [ethnicity_mapping.get(g, g) for g in groups]
             else:
-                plt.text(0.5, 0.5, f'Insufficient data for FPR heatmap for {metabolizer}',
-                         ha='center', va='center')
-                plt.axis('off')
+                group_labels = groups
         else:
-            plt.text(0.5, 0.5, f'No FPR data available for {metabolizer}',
-                     ha='center', va='center')
-            plt.axis('off')
+            groups = sorted(set(group for gene_data in prediction_data.values() for group in gene_data.keys()))
+            group_labels = groups
 
-    # Create a heatmap of demographic parity for Superpopulation
-    if 'demographic_parity_metrics' in data:
-        plt.subplot(1, 2, 2)
+        matrix_data = []
+        for gene in genes:
+            row = []
+            for group in groups:
+                row.append(prediction_data.get(gene, {}).get(group, 0))
+            matrix_data.append(row)
 
-        # Collect data for heatmap
-        heatmap_data = []
-
-        for gene in data['demographic_parity_metrics']:
-            if 'Superpopulation' in data['demographic_parity_metrics'][gene]:
-                demo_data = data['demographic_parity_metrics'][gene]['Superpopulation']
-
-                if metabolizer in demo_data and 'prediction_rates_by_group' in demo_data[metabolizer]:
-                    for group, rate in demo_data[metabolizer]['prediction_rates_by_group'].items():
-                        heatmap_data.append({
-                            'Gene': gene,
-                            'Group': group,
-                            'Rate': rate
-                        })
-
-        if heatmap_data:
-            df = pd.DataFrame(heatmap_data)
-
-            # Create pivot table for heatmap
-            pivot_df = df.pivot_table(
-                index='Gene',
-                columns='Group',
-                values='Rate',
-                aggfunc='mean'
-            )
-
-            if not pivot_df.empty:
-                sns.heatmap(pivot_df, cmap="YlGnBu", annot=True, fmt=".2f", linewidths=.5)
-                plt.title(f'Prediction Rate by Gene & Superpopulation ({metabolizer})')
-            else:
-                plt.text(0.5, 0.5, f'Insufficient data for prediction rate heatmap for {metabolizer}',
-                         ha='center', va='center')
-                plt.axis('off')
+        if matrix_data:
+            pivot_df = pd.DataFrame(matrix_data, index=genes, columns=group_labels)
+            sns.heatmap(pivot_df, cmap="YlGnBu", annot=True, fmt=".3f", linewidths=.5, ax=axes[0, 1],
+                        cbar_kws={'label': 'Prediction Rate'})
+            axes[0, 1].set_title(f'Prediction Rate by Gene & {demographic_key}', fontsize=12, fontweight='bold')
+            axes[0, 1].set_xlabel(demographic_key)
+            axes[0, 1].set_ylabel('Gene')
         else:
-            plt.text(0.5, 0.5, f'No prediction rate data available for {metabolizer}',
-                     ha='center', va='center')
-            plt.axis('off')
+            axes[0, 1].text(0.5, 0.5, 'No prediction data available', ha='center', va='center')
+            axes[0, 1].axis('off')
+    else:
+        axes[0, 1].text(0.5, 0.5, 'No prediction data available', ha='center', va='center')
+        axes[0, 1].axis('off')
+
+    if prediction_data:
+        pred_disparity = calculate_disparity(prediction_data)
+        if pred_disparity:
+            genes = sorted([g for g in target_genes if g in pred_disparity])
+            disparities = [pred_disparity[g] for g in genes]
+
+            colors = ['#FF6B6B' if d > 0.1 else '#4ECDC4' for d in disparities]
+            bars = axes[1, 0].bar(genes, disparities, color=colors)
+            axes[1, 0].set_title(f'Bias calculation using {bias_method}', fontsize=12, fontweight='bold')
+            axes[1, 0].set_xlabel('Gene')
+            axes[1, 0].set_ylabel('Max Disparity in Prediction Rate')
+            axes[1, 0].tick_params(axis='x', rotation=45)
+
+            for bar, disp in zip(bars, disparities):
+                height = bar.get_height()
+                axes[1, 0].text(bar.get_x() + bar.get_width() / 2., height,
+                                f'{disp:.3f}', ha='center', va='bottom', fontsize=9)
+        else:
+            axes[1, 0].text(0.5, 0.5, 'No disparity data available', ha='center', va='center')
+            axes[1, 0].axis('off')
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No disparity data available', ha='center', va='center')
+        axes[1, 0].axis('off')
+
+    if fpr_data:
+        fpr_disparity = calculate_disparity(fpr_data)
+        if fpr_disparity:
+            genes = sorted([g for g in target_genes if g in fpr_disparity])
+            disparities = [fpr_disparity[g] for g in genes]
+
+            colors = ['#FF6B6B' if d > 0.1 else '#95E1D3' for d in disparities]
+            bars = axes[1, 1].bar(genes, disparities, color=colors)
+            axes[1, 1].set_title(f'Fairness Disparity (FPR) by Gene', fontsize=12, fontweight='bold')
+            axes[1, 1].set_xlabel('Gene')
+            axes[1, 1].set_ylabel('Max Disparity in FPR')
+            axes[1, 1].tick_params(axis='x', rotation=45)
+
+            for bar, disp in zip(bars, disparities):
+                height = bar.get_height()
+                axes[1, 1].text(bar.get_x() + bar.get_width() / 2., height,
+                                f'{disp:.3f}', ha='center', va='bottom', fontsize=9)
+        else:
+            axes[1, 1].text(0.5, 0.5, 'No FPR disparity data available', ha='center', va='center')
+            axes[1, 1].axis('off')
+    else:
+        axes[1, 1].text(0.5, 0.5, 'No FPR disparity data available', ha='center', va='center')
+        axes[1, 1].axis('off')
 
     plt.tight_layout()
-    safe_metabolizer = str(metabolizer).replace('/', '_').replace('\\', '_').replace(' ', '_')
-    plt.savefig(os.path.join(output_dir, f'metabolizer_{safe_metabolizer}_dashboard.png'))
+
+    filename = f"fairness_bias_{demographic_key.lower()}.png"
+    plt.savefig(os.path.join(output_dir, filename), dpi=300, bbox_inches='tight')
     plt.close()
+    print(f"Saved: {filename}")
 
 
 def main():
-    """Main function to run the visualizations"""
     args = parse_args()
     output_dir = ensure_output_dir(args.output_dir)
 
@@ -378,16 +238,15 @@ def main():
         data = load_json(args.input_file)
         print(f"Loaded data from {args.input_file}")
 
-        # Generate visualizations
-        visualize_equalized_odds(data, output_dir)
-        visualize_demographic_parity(data, output_dir)
-        create_simple_dashboard(data, output_dir)
-        create_metabolizer_dashboards(data, output_dir)
+        ethnicity_mapping = data.get('metadata', {}).get('ethnicity_mapping')
+
+        create_consolidated_visualization(data, 'Superpopulation', output_dir, ethnicity_mapping)
+
+        create_consolidated_visualization(data, 'Sex', output_dir)
 
         print(f"All visualizations saved to {output_dir}")
     except Exception as e:
         print(f"Error processing the analysis file: {e}")
-        # Create an error image
         plt.figure(figsize=(8, 6))
         plt.text(0.5, 0.5, f"Error: {str(e)}",
                  ha='center', va='center', fontsize=12, color='red')

@@ -4,7 +4,6 @@ import os
 
 import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 
 
 def parse_args():
@@ -25,34 +24,38 @@ def determine_analysis_type(df):
 
 def load_data(file_path):
     if file_path.endswith('.csv'):
-        return pd.read_csv(file_path)
+        return pd.read_csv(file_path), None, None
     elif file_path.endswith('.json'):
         with open(file_path, 'r') as f:
             data = json.load(f)
-        if isinstance(data, list):
-            return pd.DataFrame(data)
+
+        metadata = data.get('metadata', {})
+        sensitivity = metadata.get('sensitivity')
+        method = metadata.get('method')
+
+        if isinstance(data, dict) and 'results' in data:
+            return pd.DataFrame(data['results']), sensitivity, method
+        elif isinstance(data, list):
+            return pd.DataFrame(data), None, None
         else:
-            if 'results' in data:
-                return pd.DataFrame(data['results'])
-            else:
-                flattened_data = []
-                for key, value in data.items():
-                    if isinstance(value, dict):
-                        for subkey, subvalue in value.items():
-                            if isinstance(subvalue, dict):
-                                row = {'Gene': key, 'Feature': subkey}
-                                if 'Association' in subvalue:
-                                    row['Association'] = subvalue['Association']
-                                    row['P_Value'] = subvalue.get('P_Value', 0)
-                                elif 'Importance' in subvalue:
-                                    row['Importance'] = subvalue['Importance']
-                                flattened_data.append(row)
-                return pd.DataFrame(flattened_data)
+            flattened_data = []
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    for subkey, subvalue in value.items():
+                        if isinstance(subvalue, dict):
+                            row = {'Gene': key, 'Feature': subkey}
+                            if 'Association' in subvalue:
+                                row['Association'] = subvalue['Association']
+                                row['P_Value'] = subvalue.get('P_Value', 0)
+                            elif 'Importance' in subvalue:
+                                row['Importance'] = subvalue['Importance']
+                            flattened_data.append(row)
+            return pd.DataFrame(flattened_data), None, None
     else:
         raise ValueError(f"Unsupported file format: {file_path}")
 
 
-def plot_top_features_per_gene(df, gene, output_dir, analysis_type):
+def plot_top_features_per_gene(df, gene, output_dir, analysis_type, sensitivity, method):
     gene_df = df[df['Gene'] == gene].copy()
 
     if len(gene_df) == 0:
@@ -62,12 +65,10 @@ def plot_top_features_per_gene(df, gene, output_dir, analysis_type):
     if analysis_type == 'categorical_association':
         gene_df = gene_df.loc[gene_df['Association'].abs().nlargest(10).index]
         importance_col = 'Association'
-        title = f'Top Features for {gene} (Association)'
         color_map = gene_df['Association'].apply(lambda x: 'red' if x < 0 else 'blue')
     else:
         gene_df = gene_df.sort_values('Importance', ascending=False).head(10)
         importance_col = 'Importance'
-        title = f'Top Features for {gene} (Mutual Information)'
         color_map = 'blue'
 
     if len(gene_df) == 0:
@@ -76,6 +77,12 @@ def plot_top_features_per_gene(df, gene, output_dir, analysis_type):
 
     plt.figure(figsize=(10, 6))
     plt.barh(gene_df['Feature'], gene_df[importance_col], color=color_map)
+
+    if sensitivity is not None and method is not None:
+        title = f'Sensitivity [0,1]: {sensitivity}, Methodology: {method}'
+    else:
+        title = f'Top Features for {gene} ({analysis_type})'
+
     plt.title(title)
     plt.xlabel('Importance' if analysis_type == 'mutual_information' else 'Correlation')
     plt.ylabel('Feature')
@@ -85,79 +92,6 @@ def plot_top_features_per_gene(df, gene, output_dir, analysis_type):
     plt.close()
 
 
-def create_heatmap(df, output_dir, analysis_type):
-    target_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
-    available_genes = df['Gene'].unique()
-    genes_to_use = [gene for gene in target_genes if gene in available_genes]
-
-    if not genes_to_use:
-        print("No target genes found in the data")
-        return
-
-    if analysis_type == 'categorical_association':
-        top_features_per_gene = {}
-        for gene in genes_to_use:
-            gene_df = df[df['Gene'] == gene]
-            if len(gene_df) == 0:
-                continue
-            top_features_per_gene[gene] = gene_df.loc[gene_df['Association'].abs().nlargest(5).index][
-                'Feature'].tolist()
-
-        value_col = 'Association'
-        title = 'Feature Association Heatmap'
-        cmap = 'coolwarm'
-        center = 0
-    else:
-        top_features_per_gene = {}
-        for gene in genes_to_use:
-            gene_df = df[df['Gene'] == gene]
-            if len(gene_df) == 0:
-                continue
-            top_features_per_gene[gene] = gene_df.nlargest(5, 'Importance')['Feature'].tolist()
-
-        value_col = 'Importance'
-        title = 'Feature Importance Heatmap'
-        cmap = 'viridis'
-        center = None
-
-    top_features = []
-    for features in top_features_per_gene.values():
-        top_features.extend(features)
-    top_features = list(set(top_features))
-
-    if not top_features:
-        print("No top features found to create heatmap")
-        return
-
-    filtered_df = df[(df['Gene'].isin(genes_to_use)) & (df['Feature'].isin(top_features))]
-
-    if len(filtered_df) == 0:
-        print("No data available for heatmap after filtering")
-        return
-
-    try:
-        pivot_df = filtered_df.pivot_table(index='Gene', columns='Feature', values=value_col)
-
-        if pivot_df.empty:
-            print("Pivot table is empty, cannot create heatmap")
-            return
-
-        plt.figure(figsize=(12, 8))
-        sns.heatmap(pivot_df, cmap=cmap, center=center, annot=True, fmt=".2f", linewidths=.5)
-        plt.title(title)
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f"{analysis_type}_heatmap.png"))
-        plt.close()
-    except Exception as e:
-        print(f"Error creating heatmap: {e}")
-        plt.figure(figsize=(12, 8))
-        plt.text(0.5, 0.5, f"Could not create heatmap: {e}",
-                 horizontalalignment='center', fontsize=12)
-        plt.axis('off')
-        plt.savefig(os.path.join(output_dir, f"{analysis_type}_error.png"))
-        plt.close()
-
-
 def main():
     args = parse_args()
 
@@ -165,7 +99,7 @@ def main():
 
     try:
         print(f"Loading data from {args.input_file}")
-        df = load_data(args.input_file)
+        df, sensitivity, method = load_data(args.input_file)
 
         if df.empty:
             print("Loaded dataframe is empty. Check the input file format.")
@@ -173,6 +107,11 @@ def main():
 
         print(f"Loaded dataframe with shape: {df.shape}")
         print(f"Columns: {df.columns.tolist()}")
+
+        if sensitivity is not None:
+            print(f"Sensitivity: {sensitivity}")
+        if method is not None:
+            print(f"Method: {method}")
 
         required_columns = ['Gene', 'Feature']
         if not all(col in df.columns for col in required_columns):
@@ -218,16 +157,10 @@ def main():
 
         for gene in genes_to_visualize:
             try:
-                plot_top_features_per_gene(df, gene, args.output_dir, analysis_type)
+                plot_top_features_per_gene(df, gene, args.output_dir, analysis_type, sensitivity, method)
                 print(f"Created visualization for {gene}")
             except Exception as e:
                 print(f"Error creating visualization for {gene}: {e}")
-
-        try:
-            create_heatmap(df, args.output_dir, analysis_type)
-            print("Created heatmap visualization")
-        except Exception as e:
-            print(f"Error creating heatmap: {e}")
 
         print(f"Visualizations saved to {args.output_dir}")
     except Exception as e:

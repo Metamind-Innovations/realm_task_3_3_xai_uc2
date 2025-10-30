@@ -118,7 +118,7 @@ def run_analysis(input_file, output_file, sensitivity):
         return mutual_information_analysis(input_df, output_df), method
 
 
-def save_results(results, output_path, method):
+def save_results(results, output_path, method, sensitivity):
     os.makedirs(output_path, exist_ok=True)
 
     if method == "categorical_association":
@@ -136,8 +136,13 @@ def save_results(results, output_path, method):
         result_df = result_df.sort_values(by=["Gene", "Association"], ascending=[True, False])
         output_file = os.path.join(output_path, "categorical_association_analysis.json")
 
-        # Convert to JSON
-        json_data = result_df.to_dict(orient='records')
+        json_data = {
+            "metadata": {
+                "sensitivity": sensitivity,
+                "method": method
+            },
+            "results": result_df.to_dict(orient='records')
+        }
         with open(output_file, 'w') as f:
             json.dump(json_data, f, indent=2)
 
@@ -155,8 +160,13 @@ def save_results(results, output_path, method):
         result_df = result_df.sort_values(by=["Gene", "Importance"], ascending=[True, False])
         output_file = os.path.join(output_path, "mutual_information_analysis.json")
 
-        # Convert to JSON
-        json_data = result_df.to_dict(orient='records')
+        json_data = {
+            "metadata": {
+                "sensitivity": sensitivity,
+                "method": method
+            },
+            "results": result_df.to_dict(orient='records')
+        }
         with open(output_file, 'w') as f:
             json.dump(json_data, f, indent=2)
 
@@ -178,7 +188,7 @@ def main():
         raise ValueError("Sensitivity must be between 0 and 1")
 
     results, method = run_analysis(args.input_file, args.output_file, args.sensitivity)
-    result_df = save_results(results, args.results_dir, method)
+    result_df = save_results(results, args.results_dir, method, args.sensitivity)
 
     print(f"Analysis complete using {method} method. Results saved to {args.results_dir} as JSON")
 

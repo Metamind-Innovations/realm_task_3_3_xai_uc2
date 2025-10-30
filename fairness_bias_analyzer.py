@@ -206,7 +206,20 @@ def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, g
     print("Calculating Demographic Parity metrics")
     demographic_parity_metrics = calculate_demographic_parity(merged_df, target_genes, demographics)
 
+    ethnicity_mapping = {
+        "EAS": "East Asia",
+        "EUR": "Europe",
+        "AMR": "Ad mixed American",
+        "AFR": "African",
+        "SAS": "South Asian"
+    }
+
     results = {
+        'metadata': {
+            'fairness_method': 'calculate_equalized_odds',
+            'bias_method': 'calculate_demographic_parity',
+            'ethnicity_mapping': ethnicity_mapping
+        },
         'equalized_odds_metrics': equalized_odds_metrics,
         'demographic_parity_metrics': demographic_parity_metrics
     }
