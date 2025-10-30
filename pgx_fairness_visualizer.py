@@ -137,7 +137,7 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
             axes[0, 0].set_xlabel(display_key)
             axes[0, 0].set_ylabel('Gene')
 
-            fig.text(0.25, 0.485, 'Shows average false positive rates across phenotypes; lower is better',
+            fig.text(0.25, 0.51, 'Shows average false positive rates across phenotypes; lower is better',
                      ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[0, 0].text(0.5, 0.5, 'No FPR data available', ha='center', va='center')
@@ -173,7 +173,7 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
             axes[0, 1].set_xlabel(display_key)
             axes[0, 1].set_ylabel('Gene')
 
-            fig.text(0.75, 0.485, 'Shows average prediction rates across phenotypes; closer to 0.5 is better',
+            fig.text(0.75, 0.51, 'Shows average prediction rates across phenotypes; closer to 0.5 is better',
                      ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[0, 1].text(0.5, 0.5, 'No prediction data available', ha='center', va='center')
@@ -200,7 +200,7 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
                 axes[1, 0].text(bar.get_x() + bar.get_width() / 2., height,
                                 f'{disp:.3f}', ha='center', va='bottom', fontsize=9)
 
-            fig.text(0.25, 0.01, 'Shows maximum difference in prediction rates between groups; lower is better',
+            fig.text(0.25, 0.05, 'Shows maximum difference in prediction rates between groups; lower is better',
                      ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[1, 0].text(0.5, 0.5, 'No disparity data available', ha='center', va='center')
@@ -227,7 +227,7 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
                 axes[1, 1].text(bar.get_x() + bar.get_width() / 2., height,
                                 f'{disp:.3f}', ha='center', va='bottom', fontsize=9)
 
-            fig.text(0.75, 0.01, 'Shows maximum difference in false positive rates between groups; lower is better',
+            fig.text(0.75, 0.05, 'Shows maximum difference in false positive rates between groups; lower is better',
                      ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[1, 1].text(0.5, 0.5, 'No FPR disparity data available', ha='center', va='center')
