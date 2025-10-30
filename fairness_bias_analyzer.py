@@ -1,6 +1,5 @@
 import argparse
 import json
-import re
 from pathlib import Path
 
 import numpy as np
@@ -18,28 +17,6 @@ class NumpyEncoder(json.JSONEncoder):
         elif isinstance(obj, (np.bool_, bool)):
             return bool(obj)
         return super(NumpyEncoder, self).default(obj)
-
-
-def parse_population_codes(population_codes_file):
-    with open(population_codes_file, 'r') as f:
-        content = f.read()
-
-    population_info = {}
-
-    table_pattern = r'\|\s+(\w+)\s+\|\s+([^|]+)\|\s+(\w+)\s+\|'
-    matches = re.findall(table_pattern, content)
-
-    for match in matches:
-        pop_code = match[0].strip()
-        description = match[1].strip()
-        super_pop = match[2].strip()
-
-        population_info[pop_code] = {
-            'description': description,
-            'super_population': super_pop
-        }
-
-    return population_info
 
 
 def load_cohort_data(cohort_file):
@@ -181,12 +158,9 @@ def calculate_demographic_parity(data, target_genes, demographics):
     return metrics
 
 
-def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, groundtruth_file, output_file):
+def analyze_fairness_bias(cohort_file, phenotypes_file, groundtruth_file, output_file):
     target_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
     demographics = ['Sex', 'Population', 'Superpopulation']
-
-    print(f"Loading population codes from {population_codes_file}")
-    population_info = parse_population_codes(population_codes_file)
 
     print(f"Loading cohort data from {cohort_file}")
     cohort_df = load_cohort_data(cohort_file)
@@ -235,7 +209,6 @@ def analyze_fairness_bias(cohort_file, phenotypes_file, population_codes_file, g
 
 def main():
     parser = argparse.ArgumentParser(description='Analyze fairness and bias in PharmCAT phenotype predictions')
-    parser.add_argument('--population-codes', required=True, help='Path to population codes markdown file')
     parser.add_argument('--cohort', required=True, help='Path to cohort CSV file')
     parser.add_argument('--phenotypes', required=True, help='Path to phenotypes CSV file')
     parser.add_argument('--groundtruth', required=True, help='Path to ground truth phenotypes CSV file')
@@ -243,7 +216,7 @@ def main():
 
     args = parser.parse_args()
 
-    analyze_fairness_bias(args.cohort, args.phenotypes, args.population_codes, args.groundtruth, args.output)
+    analyze_fairness_bias(args.cohort, args.phenotypes, args.groundtruth, args.output)
 
 
 if __name__ == "__main__":

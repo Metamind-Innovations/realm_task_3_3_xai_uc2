@@ -6,6 +6,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 from sklearn.feature_selection import mutual_info_classif
+from scipy.stats import chi2_contingency
 
 
 def load_data(input_file, output_file):
@@ -22,9 +23,6 @@ def cramers_v(x, y):
     """
     Calculate Cramer's V statistic for categorical association between two variables.
     """
-    from scipy.stats import chi2_contingency
-    import numpy as np
-
     contingency = pd.crosstab(x, y)
 
     chi2, p, dof, expected = chi2_contingency(contingency)

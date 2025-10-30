@@ -363,15 +363,6 @@ def fairness_bias_analyzer(
 
     print(f"Found fairness analyzer script: {fairness_script}")
 
-    # Find required input files
-    population_codes_file = demographic_data_path / "population_codes.md"
-    if not population_codes_file.is_file():
-        population_codes_files = list(demographic_data_path.glob("**/population_codes.md"))
-        if population_codes_files:
-            population_codes_file = population_codes_files[0]
-        else:
-            raise Exception(f"Population codes file not found at {population_codes_file} or subdirectories")
-
     cohort_file = demographic_data_path / "pgx_cohort.csv"
     if not cohort_file.is_file():
         cohort_files = list(demographic_data_path.glob("**/pgx_cohort.csv"))
@@ -400,7 +391,6 @@ def fairness_bias_analyzer(
 
     command = [
         "python", str(fairness_script),
-        "--population-codes", str(population_codes_file),
         "--cohort", str(cohort_file),
         "--phenotypes", str(phenotypes_file),
         "--groundtruth", str(groundtruth_file),

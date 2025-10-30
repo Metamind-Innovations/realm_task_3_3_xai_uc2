@@ -102,8 +102,10 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
         print(f"No data available for demographic: {demographic_key}")
         return
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(f'Fairness and Bias Analysis by {demographic_key}', fontsize=16, fontweight='bold')
+    display_key = "Ethnicity" if demographic_key == "Superpopulation" else demographic_key
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14.5))
+    fig.suptitle(f'Fairness and Bias Analysis by {display_key}', fontsize=16, fontweight='bold')
 
     target_genes = ["CYP2B6", "CYP2C9", "CYP2C19", "CYP3A5", "SLCO1B1", "TPMT", "DPYD"]
 
@@ -130,10 +132,13 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
             pivot_df = pd.DataFrame(matrix_data, index=genes, columns=group_labels)
             sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".3f", linewidths=.5, ax=axes[0, 0],
                         cbar_kws={'label': 'FPR'})
-            axes[0, 0].set_title(f'Fairness calculation using {fairness_method}\nby Gene & {demographic_key}',
+            axes[0, 0].set_title(f'Fairness calculation using {fairness_method}\nby Gene & {display_key}',
                                  fontsize=12, fontweight='bold')
-            axes[0, 0].set_xlabel(demographic_key)
+            axes[0, 0].set_xlabel(display_key)
             axes[0, 0].set_ylabel('Gene')
+
+            fig.text(0.25, 0.465, 'Shows average false positive rates across phenotypes; lower is better',
+                     ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[0, 0].text(0.5, 0.5, 'No FPR data available', ha='center', va='center')
             axes[0, 0].axis('off')
@@ -164,9 +169,12 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
             pivot_df = pd.DataFrame(matrix_data, index=genes, columns=group_labels)
             sns.heatmap(pivot_df, cmap="YlGnBu", annot=True, fmt=".3f", linewidths=.5, ax=axes[0, 1],
                         cbar_kws={'label': 'Prediction Rate'})
-            axes[0, 1].set_title(f'Prediction Rate by Gene & {demographic_key}', fontsize=12, fontweight='bold')
-            axes[0, 1].set_xlabel(demographic_key)
+            axes[0, 1].set_title(f'Prediction Rate by Gene & {display_key}', fontsize=12, fontweight='bold')
+            axes[0, 1].set_xlabel(display_key)
             axes[0, 1].set_ylabel('Gene')
+
+            fig.text(0.75, 0.465, 'Shows average prediction rates across phenotypes; closer to 0.5 is better',
+                     ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[0, 1].text(0.5, 0.5, 'No prediction data available', ha='center', va='center')
             axes[0, 1].axis('off')
@@ -191,6 +199,9 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
                 height = bar.get_height()
                 axes[1, 0].text(bar.get_x() + bar.get_width() / 2., height,
                                 f'{disp:.3f}', ha='center', va='bottom', fontsize=9)
+
+            fig.text(0.25, 0.005, 'Shows maximum difference in prediction rates between groups; lower is better',
+                     ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[1, 0].text(0.5, 0.5, 'No disparity data available', ha='center', va='center')
             axes[1, 0].axis('off')
@@ -215,6 +226,9 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
                 height = bar.get_height()
                 axes[1, 1].text(bar.get_x() + bar.get_width() / 2., height,
                                 f'{disp:.3f}', ha='center', va='bottom', fontsize=9)
+
+            fig.text(0.75, 0.005, 'Shows maximum difference in false positive rates between groups; lower is better',
+                     ha='center', fontsize=10, style='italic', color='#555555')
         else:
             axes[1, 1].text(0.5, 0.5, 'No FPR disparity data available', ha='center', va='center')
             axes[1, 1].axis('off')
@@ -222,9 +236,13 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
         axes[1, 1].text(0.5, 0.5, 'No FPR disparity data available', ha='center', va='center')
         axes[1, 1].axis('off')
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
 
-    filename = f"fairness_bias_{demographic_key.lower()}.png"
+    if demographic_key == "Superpopulation":
+        filename = f"fairness_bias_ethnicity.png"
+    else:
+        filename = f"fairness_bias_{demographic_key.lower()}.png"
+
     plt.savefig(os.path.join(output_dir, filename), dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {filename}")

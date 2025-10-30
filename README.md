@@ -94,7 +94,8 @@ python explainer_visualizer.py --input_file explainer_results/categorical_associ
 # Visualize fairness analysis
 python pgx_fairness_visualizer.py --input_file fairness_analysis.json --output_dir fairness_visualizations
 ```
-12. _Alternative Pipeline Execution_: Use the Kubeflow pipeline to automate the entire workflow: `python kubeflow_component/pgx_pipeline_component.py`. This will generate a `pharmcat_pipeline_.yaml` file that can be uploaded to a Kubeflow environment for execution. See more details in the [Kubeflow Pipeline Component](#kubeflow-pipeline-component) section.
+12. _Alternative Pipeline Execution_: Use the Kubeflow pipeline to automate the entire workflow: `python kubeflow_component/pgx_pipeline_component.py`. This will generate a `pharmcat_pipeline_.yaml` file that can be uploaded to a Kubeflow environment for execution. See more details in the [Kubeflow Pipeline Component](#kubeflow-pipeline-component) section. 
+**Note:** Use `minikube start --cpus=8 --memory=16384` or a value greater than the default (`cpus=2` and `memory=2048`) in order to provide more computational resources to the container and speed up execution.
 
 ## JSON Output
 
