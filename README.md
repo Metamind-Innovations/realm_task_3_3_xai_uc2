@@ -85,11 +85,14 @@ This will execute the pharmcat pipeline for all samples placed in the `data` fol
    1. The `sensitivity` parameter (0.0-1.0) controls the analysis method:
       - Lower values (<0.5) use mutual information analysis (faster)
       - Higher values (≥0.5) use categorical association analysis (more precise)
-10. Fairness and Bias Analysis: `python fairness_bias_analyzer.py --population-codes Demographics/population_codes.md --cohort Demographics/pgx_cohort.csv --phenotypes result/phenotypes.csv --groundtruth Groundtruth/groundtruth_phenotype_filtered.csv --output fairness_analysis.json`
-11. Visualize Results (Optional): 
+10. Fairness and Bias Analysis: `python fairness_bias_analyzer.py --cohort Demographics/pgx_cohort.csv --phenotypes result/phenotypes.csv --groundtruth Groundtruth/groundtruth_phenotype_filtered.csv --output fairness_analysis.json`
+11. Visualize the results: 
 ```
 # Visualize explainability results
-python explainer_visualizer.py --input_file explainer_results/categorical_association_analysis.json --output_dir explainer_visualizations
+python explainer_visualizer.py --input_file .\explainer_results\categorical_association_analysis.json --output_dir explainer_visualizations\categorical_association
+
+# Or for mutual information analysis
+python explainer_visualizer.py --input_file .\explainer_results\mutual_information_analysis.json --output_dir explainer_visualizations\mutual_information_analysis
 
 # Visualize fairness analysis
 python pgx_fairness_visualizer.py --input_file fairness_analysis.json --output_dir fairness_visualizations

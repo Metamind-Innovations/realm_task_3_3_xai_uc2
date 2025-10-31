@@ -66,29 +66,36 @@ def plot_top_features_per_gene(df, gene, output_dir, analysis_type, sensitivity,
         gene_df = gene_df.loc[gene_df['Association'].abs().nlargest(10).index]
         importance_col = 'Association'
         color_map = gene_df['Association'].apply(lambda x: 'red' if x < 0 else 'blue')
+        explanation = 'Shows association strength between features and phenotypes; higher values indicate stronger relationships'
     else:
         gene_df = gene_df.sort_values('Importance', ascending=False).head(10)
         importance_col = 'Importance'
         color_map = 'blue'
+        explanation = 'Shows mutual information between features and phenotypes; higher values indicate features more useful for predicting phenotypes'
 
     if len(gene_df) == 0:
         print(f"No features found for gene {gene} after filtering")
         return
 
-    plt.figure(figsize=(10, 6))
-    plt.barh(gene_df['Feature'], gene_df[importance_col], color=color_map)
+    fig, ax = plt.subplots(figsize=(10, 6.5))
+    ax.barh(gene_df['Feature'], gene_df[importance_col], color=color_map)
 
     if sensitivity is not None and method is not None:
-        title = f'Sensitivity [0,1]: {sensitivity}, Methodology: {method}'
+        formatted_method = method.replace('_', ' ').title()
+        title = f'Sensitivity [0,1]: {sensitivity}, Methodology: {formatted_method}'
     else:
-        title = f'Top Features for {gene} ({analysis_type})'
+        formatted_type = analysis_type.replace('_', ' ').title()
+        title = f'Top Features for {gene} ({formatted_type})'
 
-    plt.title(title)
-    plt.xlabel('Importance' if analysis_type == 'mutual_information' else 'Correlation')
-    plt.ylabel('Feature')
-    plt.tight_layout()
+    ax.set_title(title)
+    ax.set_xlabel('Importance' if analysis_type == 'mutual_information' else 'Association')
+    ax.set_ylabel('Feature')
 
-    plt.savefig(os.path.join(output_dir, f"{gene}_{analysis_type}.png"))
+    fig.text(0.5, 0.02, explanation, ha='center', fontsize=10, style='italic', color='#555555')
+
+    plt.tight_layout(rect=[0, 0.04, 1, 1])
+
+    plt.savefig(os.path.join(output_dir, f"{gene}_{analysis_type}.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 
