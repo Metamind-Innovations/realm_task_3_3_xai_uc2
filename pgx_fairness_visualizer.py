@@ -39,6 +39,19 @@ def ensure_output_dir(output_dir):
     return output_dir
 
 
+def format_method_name(method_name):
+    """Format method name by removing 'calculate_' prefix, capitalizing and removing underscores.
+
+    :param method_name: Method name with underscores (e.g., 'calculate_equalized_odds').
+    :type method_name: str
+    :returns: Formatted method name (e.g., 'Equalized Odds').
+    :rtype: str
+    """
+    if method_name.startswith('calculate_'):
+        method_name = method_name[len('calculate_'):]
+    return method_name.replace('_', ' ').title()
+
+
 def extract_average_metrics(data, demographic_key):
     fpr_data = {}
     prediction_data = {}
@@ -96,6 +109,9 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
     fairness_method = data.get('metadata', {}).get('fairness_method', 'calculate_equalized_odds')
     bias_method = data.get('metadata', {}).get('bias_method', 'calculate_demographic_parity')
 
+    fairness_method_display = format_method_name(fairness_method)
+    bias_method_display = format_method_name(bias_method)
+
     fpr_data, prediction_data = extract_average_metrics(data, demographic_key)
 
     if not fpr_data and not prediction_data:
@@ -132,7 +148,7 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
             pivot_df = pd.DataFrame(matrix_data, index=genes, columns=group_labels)
             sns.heatmap(pivot_df, cmap="YlOrRd", annot=True, fmt=".3f", linewidths=.5, ax=axes[0, 0],
                         cbar_kws={'label': 'FPR'})
-            axes[0, 0].set_title(f'Fairness calculation using {fairness_method}\nby Gene & {display_key}',
+            axes[0, 0].set_title(f'Fairness Calculation using {fairness_method_display}\nby Gene & {display_key}',
                                  fontsize=12, fontweight='bold')
             axes[0, 0].set_xlabel(display_key)
             axes[0, 0].set_ylabel('Gene')
@@ -190,7 +206,7 @@ def create_consolidated_visualization(data, demographic_key, output_dir, ethnici
 
             colors = ['#FF6B6B' if d > 0.1 else '#4ECDC4' for d in disparities]
             bars = axes[1, 0].bar(genes, disparities, color=colors)
-            axes[1, 0].set_title(f'Bias calculation using {bias_method}', fontsize=12, fontweight='bold')
+            axes[1, 0].set_title(f'Bias Calculation using {bias_method_display}', fontsize=12, fontweight='bold')
             axes[1, 0].set_xlabel('Gene')
             axes[1, 0].set_ylabel('Max Disparity in Prediction Rate')
             axes[1, 0].tick_params(axis='x', rotation=45)
