@@ -260,7 +260,7 @@ Features in the output follow these patterns:
 - `GENE_rsID_ref_ALLELE`: Reference allele (e.g., "CYP2C9_rs28371686_ref_C")
 - `GENE_rsID_gt_GENOTYPE`: Genotype (e.g., "CYP2C19_rs3758581_gt_1/1" for homozygous)
 
-## Visualization Outputs (Optional)
+## Visualization Outputs
 
 The `explainer_visualizer.py` and `pgx_fairness_visualizer.py` scripts generate visualizations to help interpret analysis results.
 
@@ -278,6 +278,20 @@ This script processes the output from `explainer.py` (either categorical associa
 
 The visualizations are saved as PNG files in the specified output directory, with one bar chart per gene and a comprehensive heatmap.
 
+### Example Outputs
+
+**Mutual Information Analysis** plots:
+<p align="center">
+  <img src="./media/SLCO1B1_mutual_information.png" width="49%"/>
+  <img src="./media/CYP2C9_mutual_information.png" width="49%"/>
+</p>
+
+**Categorical Association Analysis** plots:
+<p align="center">
+  <img src="./media/CYP2C19_categorical_association.png" width="49%"/>
+  <img src="./media/SLCO1B1_categorical_association.png" width="49%"/>
+</p>
+
 ### Fairness Visualizations (`pgx_fairness_visualizer.py`)
 
 This script processes the output from `fairness_bias_analyzer.py` and generates:
@@ -294,6 +308,19 @@ This script processes the output from `fairness_bias_analyzer.py` and generates:
   - A heatmap of average false positive rates by gene and superpopulation (using "YlOrRd" color map)
   - A heatmap of average prediction rates by gene and superpopulation (using "YlGnBu" color map)
   - Both heatmaps include annotation of values for detailed inspection
+
+### Example Outputs
+
+**Ethnicity** plots:
+<p align="center">
+  <img src="./media/fairness_bias_ethnicity.png" width="98%"/>
+</p>
+
+**Sex** plots:
+<p align="center">
+  <img src="./media/fairness_bias_sex.png" width="98%"/>
+</p>
+
 
 ## Kubeflow Pipeline Component
 
@@ -322,7 +349,7 @@ After configuring the Docker image, the pipeline can be compiled and deployed to
 The Kubeflow UI expects 2 pipeline arguments when running: `github_repo_url` which contains data and python scripts and `sensitivity`, which is a [0,1] float number.
 
 The pipeline structure can be seen in the image below:
-![Kubeflow Pipeline](kubeflow_pipeline.png)
+![Kubeflow Pipeline](media/kubeflow_pipeline.png)
 
 ## Accessing the Generated Artifacts
 
