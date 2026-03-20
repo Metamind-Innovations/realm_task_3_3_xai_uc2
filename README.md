@@ -359,6 +359,12 @@ The pipeline stores generated artifacts in MinIO object storage within the Kubef
 3. Log in with the default credentials: **username:** `minio`, **password:** `minio123`
 4. Navigate to the `mlpipeline` bucket, where you'll find the respective folders according to the automatically assigned uuid of the pipeline. (An example location could be: `http://localhost:9000/minio/mlpipeline/v2/artifacts/pharmcat-pgx-analysis-pipeline/50c16278-0dde-44f1-b018-5b859a3fadf2/`)
 
+## Acknowledgements
+
+🇪🇺 REALM project has received funding from the European Union's Horizon Europe research and innovation programme under **Grant Agreement No. 101095435**.
+
+*Disclaimer: Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Commission. Neither the European Union nor the European Commission can be held responsible for them.*
+
 ## 📜 License & Usage
 
 All rights reserved by MetaMinds Innovations.
